@@ -5,6 +5,9 @@ import path from 'path';
 // ─── FIND BOT DIRECTORY ───────────────────────────────────────────────────────
 // The bot directory is always alongside the web directory
 const BOT_DIR = (() => {
+  if (process.env.VERCEL) {
+    return '/tmp';
+  }
   const candidates = [
     path.resolve(process.cwd(), '..', 'bot'),   // running from web/
     path.resolve('F:', 'FYPDISBOT', 'bot'),      // absolute fallback

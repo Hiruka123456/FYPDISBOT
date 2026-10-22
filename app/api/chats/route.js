@@ -4,6 +4,9 @@ import path from 'path';
 
 // ─── BOT DIRECTORY (same as inbox API) ───────────────────────────────────────
 const BOT_DIR = (() => {
+  if (process.env.VERCEL) {
+    return '/tmp';
+  }
   const candidates = [
     path.resolve(process.cwd(), '..', 'bot'),
     path.resolve('F:', 'FYPDISBOT', 'bot'),

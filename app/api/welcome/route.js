@@ -4,16 +4,17 @@ import path from 'path';
 
 // Path to shared welcomeConfig.json in the bot directory
 const possibleBotPaths = [
+  process.env.VERCEL ? '/tmp/welcomeConfig.json' : null,
   path.resolve(process.cwd(), '..', 'bot', 'welcomeConfig.json'),
   path.resolve('F:', 'FYPDISBOT', 'bot', 'welcomeConfig.json'),
   path.resolve(process.cwd(), 'welcomeConfig.json'),
-];
+].filter(Boolean);
 
 function getBotConfigPath() {
   for (const p of possibleBotPaths) {
     if (fs.existsSync(p)) return p;
   }
-  return possibleBotPaths[0];
+  return possibleBotPaths[0] || path.join(process.cwd(), 'welcomeConfig.json');
 }
 
 // Default fallback config
