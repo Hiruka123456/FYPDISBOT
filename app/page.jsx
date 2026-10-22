@@ -67,10 +67,47 @@ export default function DashboardPage() {
   const [isTestingLogs, setIsTestingLogs] = useState(false);
   const [logsSearch, setLogsSearch] = useState('');
 
+  // Moderation & Role Permissions State
+  const [moderationConfig, setModerationConfig] = useState({
+    globalEnabled: true,
+    adminRoleId: '1562687268739747850',
+    logChannelId: '1562687171079708784',
+    dmOnAction: true,
+    commands: {
+      kick: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Kick Member', description: 'Kick a member from the server with an optional reason', category: 'punishment', icon: '👢' },
+      ban: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Ban Member', description: 'Permanently ban a member with optional message purge', category: 'punishment', icon: '🔨' },
+      unban: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Unban User', description: 'Revoke a ban for a user by their numeric Discord User ID', category: 'punishment', icon: '🔓' },
+      timeout: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Timeout / Mute', description: 'Temporarily timeout a member (e.g. 5m, 1h, 1d, 7d)', category: 'punishment', icon: '⏳' },
+      untimeout: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Remove Timeout', description: 'Clear the timeout/mute on a member immediately', category: 'punishment', icon: '🔊' },
+      warn: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Warn Member', description: 'Issue an official logged warning to a member', category: 'warnings', icon: '⚠️' },
+      warnings: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'View Warnings', description: 'List all active warnings and history for a user', category: 'warnings', icon: '📋' },
+      clearwarn: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Clear Warnings', description: 'Delete all or a specific warning for a user', category: 'warnings', icon: '🧹' },
+      purge: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Purge Messages', description: 'Bulk delete up to 100 messages in the current channel', category: 'channel', icon: '🗑️' },
+      slowmode: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Set Slowmode', description: 'Set slowmode rate limit for chat (0s to disable)', category: 'channel', icon: '⏱️' },
+      lock: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Lock Channel', description: 'Prevent @everyone from sending messages in the channel', category: 'channel', icon: '🔒' },
+      unlock: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Unlock Channel', description: 'Restore message sending permissions for @everyone', category: 'channel', icon: '🔓' },
+      nick: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Change Nickname', description: "Change or reset a member's server nickname", category: 'member', icon: '👤' },
+      role: { enabled: true, allowedRoles: ['1562687268739747850'], name: 'Manage Roles', description: 'Add or remove a role from a member', category: 'member', icon: '🏷️' },
+    },
+  });
+  const [savedModerationConfig, setSavedModerationConfig] = useState(null);
+  const [serverRoles, setServerRoles] = useState([]);
+  const [warningsList, setWarningsList] = useState([]);
+  const [isSavingModeration, setIsSavingModeration] = useState(false);
+  const [modCategoryFilter, setModCategoryFilter] = useState('all');
+  const [modSearch, setModSearch] = useState('');
+  const [modSubView, setModSubView] = useState('commands'); // 'commands' | 'warnings'
+
   const messageEndRef = useRef(null);
   // configRef keeps a live reference to config to avoid stale closures in onBlur handlers
   const configRef = useRef(config);
   useEffect(() => { configRef.current = config; }, [config]);
+
+  // Check if moderation config was modified
+  const isModerationDirty = Boolean(
+    savedModerationConfig &&
+    JSON.stringify(moderationConfig) !== JSON.stringify(savedModerationConfig)
+  );
 
   // Check if logs config was modified
   const isLogsDirty = Boolean(
@@ -95,12 +132,13 @@ export default function DashboardPage() {
   useEffect(() => {
     async function loadInitial() {
       try {
-        const [statusRes, configRes, chatsRes, inboxRes, logsRes] = await Promise.all([
+        const [statusRes, configRes, chatsRes, inboxRes, logsRes, modRes] = await Promise.all([
           fetch('/api/status'),
           fetch('/api/welcome'),
           fetch('/api/chats'),
           fetch('/api/inbox'),
           fetch('/api/logs'),
+          fetch('/api/moderation'),
         ]);
 
         if (statusRes.ok) setServerStatus('Dashboard Online');
@@ -158,6 +196,35 @@ export default function DashboardPage() {
             setRecentLogs(logsData.recentLogs);
           }
         }
+
+        if (modRes.ok) {
+          const modData = await modRes.json();
+          let mergedMod = modData?.config || {};
+
+          // Read client-side localStorage backup so Vercel refresh never wipes settings
+          try {
+            const cachedMod = localStorage.getItem('modportal_moderation_config');
+            if (cachedMod) {
+              const parsedMod = JSON.parse(cachedMod);
+              mergedMod = {
+                ...mergedMod,
+                ...parsedMod,
+                adminRoleId: parsedMod.adminRoleId || mergedMod.adminRoleId || '1562687268739747850',
+                commands: {
+                  ...(mergedMod.commands || {}),
+                  ...(parsedMod.commands || {}),
+                },
+              };
+            }
+          } catch {}
+
+          if (!mergedMod.adminRoleId) mergedMod.adminRoleId = '1562687268739747850';
+
+          setModerationConfig(mergedMod);
+          setSavedModerationConfig(mergedMod);
+          if (Array.isArray(modData?.roles)) setServerRoles(modData.roles);
+          if (Array.isArray(modData?.warnings)) setWarningsList(modData.warnings);
+        }
       } catch {
         setServerStatus('Offline / Local');
       }
@@ -165,13 +232,14 @@ export default function DashboardPage() {
     loadInitial();
   }, []);
 
-  // Poll chats and logs periodically
+  // Poll chats, logs, and moderation periodically
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const [resChats, resLogs] = await Promise.all([
+        const [resChats, resLogs, resMod] = await Promise.all([
           fetch('/api/chats'),
           fetch('/api/logs'),
+          fetch('/api/moderation'),
         ]);
         if (resChats.ok) {
           const data = await resChats.json();
@@ -184,6 +252,11 @@ export default function DashboardPage() {
           if (Array.isArray(logsData?.recentLogs)) {
             setRecentLogs(logsData.recentLogs);
           }
+        }
+        if (resMod.ok) {
+          const modData = await resMod.json();
+          if (Array.isArray(modData?.warnings)) setWarningsList(modData.warnings);
+          if (Array.isArray(modData?.roles)) setServerRoles(modData.roles);
         }
       } catch {
         // Ignore poll error
@@ -362,6 +435,87 @@ export default function DashboardPage() {
     };
     setLogsConfig(updated);
     handleSaveLogs(updated);
+  };
+
+  // Moderation Configuration Handlers
+  const handleSaveModeration = async (overrideCfg) => {
+    const cfgToSave = overrideCfg || moderationConfig;
+    setIsSavingModeration(true);
+    try {
+      try {
+        localStorage.setItem('modportal_moderation_config', JSON.stringify(cfgToSave));
+      } catch {}
+      const res = await fetch('/api/moderation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfgToSave),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setModerationConfig(data.config);
+        setSavedModerationConfig(data.config);
+        showToast('🛡️ Moderation settings & command roles saved to Discord Bot!');
+      } else {
+        showToast('❌ Failed to save moderation configuration.');
+      }
+    } catch (err) {
+      showToast(`❌ Error: ${err.message}`);
+    } finally {
+      setIsSavingModeration(false);
+    }
+  };
+
+  const handleToggleCommand = (cmdKey) => {
+    const currentCmd = moderationConfig.commands?.[cmdKey] || {};
+    const updated = {
+      ...moderationConfig,
+      commands: {
+        ...moderationConfig.commands,
+        [cmdKey]: {
+          ...currentCmd,
+          enabled: !currentCmd.enabled,
+        },
+      },
+    };
+    setModerationConfig(updated);
+    handleSaveModeration(updated);
+  };
+
+  const handleToggleRoleForCommand = (cmdKey, roleId) => {
+    const currentCmd = moderationConfig.commands?.[cmdKey] || {};
+    const currentRoles = Array.isArray(currentCmd.allowedRoles) ? [...currentCmd.allowedRoles] : [];
+    const exists = currentRoles.includes(roleId);
+    const newRoles = exists
+      ? currentRoles.filter((id) => id !== roleId)
+      : [...currentRoles, roleId];
+
+    const updated = {
+      ...moderationConfig,
+      commands: {
+        ...moderationConfig.commands,
+        [cmdKey]: {
+          ...currentCmd,
+          allowedRoles: newRoles,
+        },
+      },
+    };
+    setModerationConfig(updated);
+    handleSaveModeration(updated);
+  };
+
+  const handleClearWarning = async (warnId, userId) => {
+    try {
+      const res = await fetch('/api/moderation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clear_warn', warnId, userId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.warnings) setWarningsList(data.warnings);
+        showToast('🧹 Warning record removed!');
+      }
+    } catch {}
   };
 
   // Send Reply to Active Customer
@@ -1095,6 +1249,538 @@ export default function DashboardPage() {
               </div>
             </>
           )}
+
+          {/* TAB: MODERATION */}
+          {activeTab === 'moderation' && (() => {
+            const MOD_CATEGORIES = [
+              { key: 'all', label: 'All Commands', icon: '🛡️' },
+              { key: 'punishment', label: 'Punishment', icon: '🔨' },
+              { key: 'warnings', label: 'Warnings', icon: '⚠️' },
+              { key: 'channel', label: 'Channel Mgmt', icon: '📁' },
+              { key: 'member', label: 'Member Mgmt', icon: '👤' },
+            ];
+
+            const filteredCmds = Object.entries(moderationConfig.commands || {}).filter(([, cmd]) => {
+              const catMatch = modCategoryFilter === 'all' || cmd.category === modCategoryFilter;
+              const searchMatch = !modSearch.trim() ||
+                cmd.name.toLowerCase().includes(modSearch.toLowerCase()) ||
+                cmd.description.toLowerCase().includes(modSearch.toLowerCase());
+              return catMatch && searchMatch;
+            });
+
+            const totalEnabled = Object.values(moderationConfig.commands || {}).filter(c => c.enabled).length;
+            const totalCmds = Object.keys(moderationConfig.commands || {}).length;
+
+            return (
+              <>
+                {/* Header Banner */}
+                <div className="welcome-banner">
+                  <div className="welcome-text">
+                    <h1>⚔️ Moderation Control Center</h1>
+                    <p>Enable/disable commands, assign roles, and manage all moderation settings from one place.</p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      className={`btn ${moderationConfig.globalEnabled ? 'btn-secondary' : 'btn-danger'}`}
+                      style={{
+                        background: moderationConfig.globalEnabled ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                        borderColor: moderationConfig.globalEnabled ? '#10b981' : '#ef4444',
+                        color: moderationConfig.globalEnabled ? '#10b981' : '#ef4444',
+                        fontWeight: 600,
+                      }}
+                      onClick={() => {
+                        const updated = { ...moderationConfig, globalEnabled: !moderationConfig.globalEnabled };
+                        setModerationConfig(updated);
+                        handleSaveModeration(updated);
+                      }}
+                    >
+                      {moderationConfig.globalEnabled ? '🟢 Moderation: ACTIVE' : '🔴 Moderation: PAUSED'}
+                    </button>
+                    {isModerationDirty && (
+                      <button
+                        className="btn btn-primary"
+                        onClick={() => handleSaveModeration()}
+                        disabled={isSavingModeration}
+                        style={{ animation: 'pulse 1.8s infinite', boxShadow: '0 0 15px rgba(99,102,241,0.6)' }}
+                      >
+                        {isSavingModeration ? 'Saving...' : '💾 Save Changes'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Sub-view Switcher */}
+                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    className={`btn ${modSubView === 'commands' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.85rem' }}
+                    onClick={() => setModSubView('commands')}
+                  >
+                    ⚙️ Commands &amp; Roles
+                  </button>
+                  <button
+                    className={`btn ${modSubView === 'settings' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.85rem' }}
+                    onClick={() => setModSubView('settings')}
+                  >
+                    🔧 Global Settings
+                  </button>
+                  <button
+                    className={`btn ${modSubView === 'warnings' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                    onClick={() => setModSubView('warnings')}
+                  >
+                    <span>⚠️ Warning Records</span>
+                    <span style={{
+                      padding: '2px 7px',
+                      borderRadius: '10px',
+                      fontSize: '0.75rem',
+                      background: modSubView === 'warnings' ? 'rgba(255,255,255,0.25)' : 'rgba(245,158,11,0.2)',
+                    }}>{warningsList.length}</span>
+                  </button>
+                </div>
+
+                {/* SUB-VIEW: GLOBAL SETTINGS */}
+                {modSubView === 'settings' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxWidth: '760px' }}>
+
+                    {/* Admin Role */}
+                    <div className="editor-card" style={{ border: '1px solid var(--border-glow)' }}>
+                      <div className="editor-card-header">
+                        <div className="editor-title">
+                          <h3>👑 Admin Role (Bypass All)</h3>
+                          <p>Members with this role can use ALL moderation commands regardless of per-command role settings.</p>
+                        </div>
+                      </div>
+                      <div className="form-group" style={{ maxWidth: '560px' }}>
+                        <label className="form-label">
+                          <span>Admin Role ID</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = { ...moderationConfig, adminRoleId: '1562687268739747850' };
+                              setModerationConfig(updated);
+                              handleSaveModeration(updated);
+                            }}
+                            style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}
+                          >
+                            ⚡ Auto-fill Admin Role (1562687268739747850)
+                          </button>
+                        </label>
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. 1562687268739747850"
+                          value={moderationConfig.adminRoleId || ''}
+                          onChange={(e) => setModerationConfig({ ...moderationConfig, adminRoleId: e.target.value })}
+                          onBlur={() => handleSaveModeration()}
+                        />
+                        {serverRoles.length > 0 && (
+                          <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            {serverRoles.map((role) => (
+                              <button
+                                key={role.id}
+                                type="button"
+                                onClick={() => {
+                                  const updated = { ...moderationConfig, adminRoleId: role.id };
+                                  setModerationConfig(updated);
+                                  handleSaveModeration(updated);
+                                }}
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: '20px',
+                                  border: `2px solid ${moderationConfig.adminRoleId === role.id ? (role.color || '#6366f1') : 'var(--border-color)'}`,
+                                  background: moderationConfig.adminRoleId === role.id ? `${role.color || '#6366f1'}22` : 'var(--bg-secondary)',
+                                  color: moderationConfig.adminRoleId === role.id ? (role.color || '#6366f1') : 'var(--text-sub)',
+                                  cursor: 'pointer',
+                                  fontSize: '0.8rem',
+                                  fontWeight: 600,
+                                  transition: 'all 0.15s',
+                                }}
+                              >
+                                {moderationConfig.adminRoleId === role.id ? '✓ ' : ''}{role.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Log Channel */}
+                    <div className="editor-card">
+                      <div className="editor-card-header">
+                        <div className="editor-title">
+                          <h3>📋 Moderation Log Channel</h3>
+                          <p>Moderation actions (kicks, bans, warns) will be posted to this channel automatically.</p>
+                        </div>
+                      </div>
+                      <div className="form-group" style={{ maxWidth: '560px' }}>
+                        <label className="form-label">
+                          <span>Log Channel ID</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = { ...moderationConfig, logChannelId: '1562687171079708784' };
+                              setModerationConfig(updated);
+                              handleSaveModeration(updated);
+                            }}
+                            style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}
+                          >
+                            ⚡ Auto-fill #logs (1562687171079708784)
+                          </button>
+                        </label>
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. 1562687171079708784"
+                          value={moderationConfig.logChannelId || ''}
+                          onChange={(e) => setModerationConfig({ ...moderationConfig, logChannelId: e.target.value })}
+                          onBlur={() => handleSaveModeration()}
+                        />
+                      </div>
+                    </div>
+
+                    {/* DM on action toggle */}
+                    <div className="editor-card">
+                      <div className="editor-card-header">
+                        <div className="editor-title">
+                          <h3>📬 DM Members on Action</h3>
+                          <p>When enabled, the bot will DM the target member to inform them of the moderation action (ban, kick, warn, etc.).</p>
+                        </div>
+                        <div className="switch-container">
+                          <span style={{ fontSize: '0.8rem', color: moderationConfig.dmOnAction ? '#10b981' : '#94a3b8' }}>
+                            {moderationConfig.dmOnAction ? 'Enabled' : 'Disabled'}
+                          </span>
+                          <label className="switch">
+                            <input
+                              type="checkbox"
+                              checked={!!moderationConfig.dmOnAction}
+                              onChange={() => {
+                                const updated = { ...moderationConfig, dmOnAction: !moderationConfig.dmOnAction };
+                                setModerationConfig(updated);
+                                handleSaveModeration(updated);
+                              }}
+                            />
+                            <span className="slider"></span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => handleSaveModeration()}
+                      disabled={isSavingModeration}
+                      style={{ alignSelf: 'flex-start', minWidth: '160px' }}
+                    >
+                      {isSavingModeration ? '⏳ Saving...' : '💾 Save All Settings'}
+                    </button>
+                  </div>
+                )}
+
+                {/* SUB-VIEW: COMMANDS & ROLES */}
+                {modSubView === 'commands' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+
+                    {/* Stats Bar */}
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                      {[
+                        { label: 'Total Commands', value: totalCmds, icon: '⚡', color: '#6366f1' },
+                        { label: 'Active', value: totalEnabled, icon: '✅', color: '#10b981' },
+                        { label: 'Disabled', value: totalCmds - totalEnabled, icon: '❌', color: '#ef4444' },
+                        { label: 'Server Roles', value: serverRoles.length, icon: '🏷️', color: '#8b5cf6' },
+                      ].map((s) => (
+                        <div key={s.label} className="editor-card" style={{ flex: '1 1 140px', padding: '1rem', textAlign: 'center', borderTop: `3px solid ${s.color}` }}>
+                          <div style={{ fontSize: '1.6rem', marginBottom: '0.2rem' }}>{s.icon}</div>
+                          <div style={{ fontSize: '1.4rem', fontWeight: 800, color: s.color }}>{s.value}</div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-sub)', marginTop: '2px' }}>{s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Filter Bar */}
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                      {MOD_CATEGORIES.map((cat) => {
+                        const count = cat.key === 'all'
+                          ? Object.keys(moderationConfig.commands || {}).length
+                          : Object.values(moderationConfig.commands || {}).filter(c => c.category === cat.key).length;
+                        return (
+                          <button
+                            key={cat.key}
+                            onClick={() => setModCategoryFilter(cat.key)}
+                            style={{
+                              padding: '6px 14px',
+                              borderRadius: '20px',
+                              border: `2px solid ${modCategoryFilter === cat.key ? 'var(--primary)' : 'var(--border-color)'}`,
+                              background: modCategoryFilter === cat.key ? 'var(--primary)' : 'var(--bg-secondary)',
+                              color: modCategoryFilter === cat.key ? '#fff' : 'var(--text-sub)',
+                              cursor: 'pointer',
+                              fontSize: '0.82rem',
+                              fontWeight: 600,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            <span>{cat.icon}</span>
+                            <span>{cat.label}</span>
+                            <span style={{
+                              fontSize: '0.7rem', padding: '1px 6px', borderRadius: '10px',
+                              background: modCategoryFilter === cat.key ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.06)',
+                            }}>{count}</span>
+                          </button>
+                        );
+                      })}
+                      <input
+                        type="text"
+                        className="form-input"
+                        style={{ flex: 1, minWidth: '180px', fontSize: '0.85rem', padding: '6px 12px' }}
+                        placeholder="Search commands..."
+                        value={modSearch}
+                        onChange={(e) => setModSearch(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Command Cards Grid */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1rem' }}>
+                      {filteredCmds.map(([cmdKey, cmd]) => {
+                        const catColors = { punishment: '#ef4444', warnings: '#f59e0b', channel: '#3b82f6', member: '#8b5cf6' };
+                        const catColor = catColors[cmd.category] || '#6366f1';
+                        const isEnabled = cmd.enabled !== false;
+                        const allowedRoles = Array.isArray(cmd.allowedRoles) ? cmd.allowedRoles : [];
+
+                        return (
+                          <div key={cmdKey} className="editor-card" style={{
+                            borderLeft: `4px solid ${isEnabled ? catColor : 'var(--border-color)'}`,
+                            opacity: isEnabled ? 1 : 0.6,
+                            transition: 'all 0.2s',
+                          }}>
+                            {/* Card Header */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                <span style={{ fontSize: '1.4rem' }}>{cmd.icon}</span>
+                                <div>
+                                  <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>/{cmdKey}</div>
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-sub)', marginTop: '1px' }}>{cmd.name}</div>
+                                </div>
+                              </div>
+                              <label className="switch" style={{ flexShrink: 0 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isEnabled}
+                                  onChange={() => handleToggleCommand(cmdKey)}
+                                />
+                                <span className="slider"></span>
+                              </label>
+                            </div>
+
+                            {/* Description */}
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: 1.5 }}>
+                              {cmd.description}
+                            </p>
+
+                            {/* Category Badge */}
+                            <div style={{ marginBottom: '0.85rem' }}>
+                              <span style={{
+                                padding: '2px 10px', borderRadius: '20px', fontSize: '0.72rem', fontWeight: 700,
+                                textTransform: 'uppercase', background: `${catColor}20`, color: catColor,
+                              }}>
+                                {cmd.category}
+                              </span>
+                            </div>
+
+                            {/* Allowed Roles Section */}
+                            <div>
+                              <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-sub)', marginBottom: '0.5rem' }}>
+                                🔑 Allowed Roles <span style={{ fontWeight: 400 }}>(Admin role always has access)</span>
+                              </div>
+                              {serverRoles.length > 0 ? (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                  {serverRoles.map((role) => {
+                                    const isChecked = allowedRoles.includes(role.id);
+                                    const roleCol = role.color || '#6366f1';
+                                    return (
+                                      <button
+                                        key={role.id}
+                                        type="button"
+                                        onClick={() => handleToggleRoleForCommand(cmdKey, role.id)}
+                                        style={{
+                                          padding: '3px 10px',
+                                          borderRadius: '20px',
+                                          border: `2px solid ${isChecked ? roleCol : 'var(--border-color)'}`,
+                                          background: isChecked ? `${roleCol}22` : 'var(--bg-secondary)',
+                                          color: isChecked ? roleCol : 'var(--text-muted)',
+                                          cursor: 'pointer',
+                                          fontSize: '0.76rem',
+                                          fontWeight: isChecked ? 700 : 400,
+                                          transition: 'all 0.15s',
+                                        }}
+                                      >
+                                        {isChecked ? '✓ ' : ''}{role.name}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                  {allowedRoles.length > 0
+                                    ? <span>✅ {allowedRoles.length} role ID(s) assigned</span>
+                                    : <span style={{ color: '#f59e0b' }}>⚠️ No extra roles — only Admin role can use this</span>
+                                  }
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {filteredCmds.length === 0 && (
+                      <div className="editor-card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-sub)' }}>
+                        <span style={{ fontSize: '2.5rem', display: 'block', marginBottom: '0.75rem' }}>🔍</span>
+                        <h4 style={{ color: 'var(--text-main)', marginBottom: '0.35rem' }}>No Commands Found</h4>
+                        <p style={{ fontSize: '0.85rem' }}>Try a different category or clear your search query.</p>
+                      </div>
+                    )}
+
+                    {/* Enable All / Disable All quick actions */}
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', paddingTop: '0.5rem' }}>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.82rem', color: '#10b981', borderColor: '#10b981' }}
+                        onClick={() => {
+                          const updated = {
+                            ...moderationConfig,
+                            commands: Object.fromEntries(
+                              Object.entries(moderationConfig.commands || {}).map(([k, v]) => [k, { ...v, enabled: true }])
+                            ),
+                          };
+                          setModerationConfig(updated);
+                          handleSaveModeration(updated);
+                        }}
+                      >
+                        ✅ Enable All Commands
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.82rem', color: '#ef4444', borderColor: '#ef4444' }}
+                        onClick={() => {
+                          const updated = {
+                            ...moderationConfig,
+                            commands: Object.fromEntries(
+                              Object.entries(moderationConfig.commands || {}).map(([k, v]) => [k, { ...v, enabled: false }])
+                            ),
+                          };
+                          setModerationConfig(updated);
+                          handleSaveModeration(updated);
+                        }}
+                      >
+                        ❌ Disable All Commands
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.82rem' }}
+                        onClick={() => {
+                          const adminId = moderationConfig.adminRoleId || '1562687268739747850';
+                          const updated = {
+                            ...moderationConfig,
+                            commands: Object.fromEntries(
+                              Object.entries(moderationConfig.commands || {}).map(([k, v]) => [k, { ...v, allowedRoles: [adminId] }])
+                            ),
+                          };
+                          setModerationConfig(updated);
+                          handleSaveModeration(updated);
+                        }}
+                      >
+                        👑 Reset All Roles to Admin Only
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-VIEW: WARNINGS */}
+                {modSubView === 'warnings' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div className="editor-card" style={{ border: '1px solid var(--border-glow)' }}>
+                      <div className="editor-card-header" style={{ marginBottom: '1rem' }}>
+                        <div className="editor-title">
+                          <h3>⚠️ Active Warning Records</h3>
+                          <p>All member warnings issued via /warn command. Click ✕ to remove individual records.</p>
+                        </div>
+                      </div>
+
+                      {warningsList.length === 0 ? (
+                        <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--text-sub)' }}>
+                          <span style={{ fontSize: '2.5rem', display: 'block', marginBottom: '0.75rem' }}>✅</span>
+                          <h4 style={{ color: 'var(--text-main)', marginBottom: '0.35rem' }}>No Active Warnings</h4>
+                          <p style={{ fontSize: '0.85rem' }}>When moderators issue /warn commands, records appear here.</p>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                          {warningsList.map((warn) => (
+                            <div
+                              key={warn.id}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '0.85rem 1rem',
+                                borderRadius: 'var(--radius-sm)',
+                                background: 'var(--bg-secondary)',
+                                borderLeft: '4px solid #f59e0b',
+                                gap: '0.75rem',
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flex: 1 }}>
+                                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                                  <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>
+                                    ⚠️ {warn.username || warn.userId}
+                                  </span>
+                                  {warn.moderator && (
+                                    <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', background: 'var(--bg-primary)', padding: '2px 8px', borderRadius: '4px' }}>
+                                      By: {warn.moderator}
+                                    </span>
+                                  )}
+                                  {warn.timestamp && (
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                      {new Date(warn.timestamp).toLocaleString()}
+                                    </span>
+                                  )}
+                                </div>
+                                {warn.reason && (
+                                  <div style={{ fontSize: '0.82rem', color: 'var(--text-sub)', fontStyle: 'italic' }}>
+                                    "{warn.reason}"
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                onClick={() => handleClearWarning(warn.id, warn.userId)}
+                                style={{
+                                  background: 'rgba(239,68,68,0.12)',
+                                  border: '1px solid rgba(239,68,68,0.4)',
+                                  color: '#ef4444',
+                                  padding: '4px 10px',
+                                  borderRadius: '6px',
+                                  cursor: 'pointer',
+                                  fontSize: '0.82rem',
+                                  fontWeight: 600,
+                                  flexShrink: 0,
+                                }}
+                              >
+                                ✕ Remove
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
 
           {/* TAB: AUDIT LOGS */}
           {activeTab === 'logs' && (
