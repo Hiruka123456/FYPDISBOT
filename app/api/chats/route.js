@@ -47,10 +47,13 @@ function getInboxChannelId() {
   try {
     if (fs.existsSync(INBOX_CONFIG_PATH)) {
       const cfg = JSON.parse(fs.readFileSync(INBOX_CONFIG_PATH, 'utf8'));
-      return (cfg.channelId || '').trim();
+      if (cfg && cfg.channelId && cfg.channelId.trim()) return cfg.channelId.trim();
     }
   } catch {}
-  return '';
+  if (process.env.INBOX_CHANNEL_ID && process.env.INBOX_CHANNEL_ID.trim()) {
+    return process.env.INBOX_CHANNEL_ID.trim();
+  }
+  return '1562655416062705815'; // Default to #inbox channel
 }
 
 // ─── DISCORD HELPERS ──────────────────────────────────────────────────────────
@@ -139,9 +142,107 @@ function getDiscordToken() {
   return '';
 }
 
-// ─── GET: Return all conversations ────────────────────────────────────────────
+function parseInboxEmbed(embed, msgTime, msgId) {
+  if (!embed || !embed.description) return null;
+  const desc = embed.description;
+  const authorName = embed.author?.name || '';
+  const avatar = embed.author?.icon_url || '';
+
+  // Case 1: Customer DM
+  if (authorName.includes('DM from')) {
+    const idMatch = desc.match(/\(ID:\s*`?(\d{15,22})`?\)/);
+    const textMatch = desc.match(/\n\n>\s*([\s\S]+?)$/);
+    if (idMatch) {
+      const userId = idMatch[1];
+      const username = authorName.replace(/^📩\s*DM from\s*/, '').trim() || ('User-' + userId.slice(-4));
+      const text = textMatch ? textMatch[1].trim() : desc;
+      return {
+        userId, username, avatar, text, sender: 'customer', senderName: username,
+        timestamp: embed.timestamp || msgTime, id: msgId
+      };
+    }
+  }
+
+  // Case 2: Staff Reply or New Chat
+  if (authorName.includes('Reply') || authorName.includes('New Chat')) {
+    const idMatch = desc.match(/\*\*To:\*\*\s*<@!?(\d{15,22})>/) || desc.match(/\(`?(\d{15,22})`?\)/);
+    const textMatch = desc.match(/\n\n>\s*([\s\S]+?)(?:\n\n[✅⚠️]|$)/);
+    if (idMatch) {
+      const userId = idMatch[1];
+      let username = authorName.replace(/^📤\s*(?:Dashboard )?Reply (?:→|to)\s*/, '')
+                               .replace(/^🆕\s*New Chat Started with\s*/, '').trim() || ('User-' + userId.slice(-4));
+      const text = textMatch ? textMatch[1].trim() : '';
+      return {
+        userId, username, avatar: '', text, sender: 'bot', senderName: 'Support Agent',
+        timestamp: embed.timestamp || msgTime, id: msgId
+      };
+    }
+  }
+  return null;
+}
+
+// ─── GET: Return all conversations (synced with Discord #inbox) ─────────────────
 export async function GET() {
-  return NextResponse.json(readHistory());
+  const history = readHistory();
+  const token = getDiscordToken();
+  const inboxId = getInboxChannelId();
+
+  // Real-time synchronization from Discord #inbox channel
+  if (token && inboxId) {
+    try {
+      const res = await fetch(`https://discord.com/api/v10/channels/${inboxId}/messages?limit=100`, {
+        headers: { Authorization: `Bot ${token}` },
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const discordMsgs = await res.json();
+        if (Array.isArray(discordMsgs) && discordMsgs.length > 0) {
+          // Process messages oldest to newest
+          const chronological = [...discordMsgs].reverse();
+          for (const dm of chronological) {
+            for (const embed of (dm.embeds || [])) {
+              const parsed = parseInboxEmbed(embed, dm.timestamp, dm.id);
+              if (parsed && parsed.text) {
+                let conv = history.conversations.find(c => c.userId === parsed.userId);
+                if (!conv) {
+                  conv = {
+                    userId: parsed.userId,
+                    username: parsed.username,
+                    avatar: parsed.avatar || '',
+                    lastMessage: parsed.text,
+                    lastUpdated: parsed.timestamp,
+                    messages: []
+                  };
+                  history.conversations.unshift(conv);
+                } else {
+                  if (parsed.username && !conv.username.startsWith('User-')) conv.username = parsed.username;
+                  if (parsed.avatar && !conv.avatar) conv.avatar = parsed.avatar;
+                  conv.lastMessage = parsed.text;
+                  conv.lastUpdated = parsed.timestamp;
+                }
+                const exists = conv.messages.some(m => m.id === parsed.id || (m.timestamp === parsed.timestamp && m.text === parsed.text));
+                if (!exists) {
+                  conv.messages.push({
+                    id: parsed.id,
+                    sender: parsed.sender,
+                    senderName: parsed.senderName,
+                    text: parsed.text,
+                    timestamp: parsed.timestamp,
+                  });
+                }
+              }
+            }
+          }
+          history.conversations.sort((a, b) => new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0));
+          writeHistory(history);
+        }
+      }
+    } catch (e) {
+      console.error('[chats API] Inbox sync error:', e.message);
+    }
+  }
+
+  return NextResponse.json(history);
 }
 
 // ─── POST: Handle actions ─────────────────────────────────────────────────────

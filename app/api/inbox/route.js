@@ -27,14 +27,17 @@ const INBOX_CONFIG_PATH = path.join(BOT_DIR, 'inboxConfig.json');
 console.log('[inbox API] BOT_DIR:', BOT_DIR);
 console.log('[inbox API] inboxConfig path:', INBOX_CONFIG_PATH);
 
-// ─── READ / WRITE ─────────────────────────────────────────────────────────────
 function readInboxConfig() {
   try {
     if (fs.existsSync(INBOX_CONFIG_PATH)) {
-      return JSON.parse(fs.readFileSync(INBOX_CONFIG_PATH, 'utf8'));
+      const cfg = JSON.parse(fs.readFileSync(INBOX_CONFIG_PATH, 'utf8'));
+      if (cfg && cfg.channelId && cfg.channelId.trim()) return cfg;
     }
   } catch {}
-  return { channelId: '' };
+  if (process.env.INBOX_CHANNEL_ID && process.env.INBOX_CHANNEL_ID.trim()) {
+    return { channelId: process.env.INBOX_CHANNEL_ID.trim() };
+  }
+  return { channelId: '1562655416062705815' };
 }
 
 function writeInboxConfig(data) {
