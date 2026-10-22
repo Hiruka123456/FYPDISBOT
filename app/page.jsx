@@ -40,7 +40,18 @@ export default function DashboardPage() {
   const [newChatMsg, setNewChatMsg] = useState('Hello! How can we help you today?');
   const [isStartingChat, setIsStartingChat] = useState(false);
 
+  // Inbox / Settings State
+  const [inboxConfig, setInboxConfig] = useState({ channelId: '' });
+  const [savedInboxConfig, setSavedInboxConfig] = useState(null);
+  const [isSavingInbox, setIsSavingInbox] = useState(false);
+
   const messageEndRef = useRef(null);
+
+  // Check if inbox config was modified
+  const isInboxDirty = Boolean(
+    savedInboxConfig &&
+    JSON.stringify(inboxConfig) !== JSON.stringify(savedInboxConfig)
+  );
 
   // Check if welcome config was modified (dirty check)
   const isDirty = Boolean(
@@ -49,14 +60,15 @@ export default function DashboardPage() {
     JSON.stringify(config) !== JSON.stringify(savedConfig)
   );
 
-  // Fetch initial welcome config & server status
+  // Fetch initial welcome config, server status, chats & inbox config
   useEffect(() => {
     async function loadInitial() {
       try {
-        const [statusRes, configRes, chatsRes] = await Promise.all([
+        const [statusRes, configRes, chatsRes, inboxRes] = await Promise.all([
           fetch('/api/status'),
           fetch('/api/welcome'),
           fetch('/api/chats'),
+          fetch('/api/inbox'),
         ]);
 
         if (statusRes.ok) setServerStatus('Dashboard Online');
@@ -75,6 +87,12 @@ export default function DashboardPage() {
               setActiveUserId(chatData.conversations[0].userId);
             }
           }
+        }
+
+        if (inboxRes.ok) {
+          const inboxData = await inboxRes.json();
+          setInboxConfig(inboxData);
+          setSavedInboxConfig(inboxData);
         }
       } catch {
         setServerStatus('Offline / Local');
@@ -167,6 +185,43 @@ export default function DashboardPage() {
       ...prev,
       message: `${prev.message} ${varName}`,
     }));
+  };
+
+  // Save Inbox Config to /api/inbox
+  const handleSaveInbox = async () => {
+    if (!isInboxDirty) return;
+    setIsSavingInbox(true);
+    try {
+      const res = await fetch('/api/inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(inboxConfig),
+      });
+      if (res.ok) {
+        setSavedInboxConfig(inboxConfig);
+        showToast('📥 Inbox channel saved! All replies will go there.');
+      } else {
+        showToast('❌ Failed to save inbox settings.');
+      }
+    } catch (err) {
+      showToast(`❌ Error: ${err.message}`);
+    } finally {
+      setIsSavingInbox(false);
+    }
+  };
+
+  // Save inbox immediately on blur
+  const saveInboxDirectly = async (newCfg) => {
+    setInboxConfig(newCfg);
+    setSavedInboxConfig(newCfg);
+    try {
+      await fetch('/api/inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCfg),
+      });
+      showToast('📥 Inbox channel saved to bot!');
+    } catch {}
   };
 
   // Send Reply to Active Customer
@@ -380,6 +435,13 @@ export default function DashboardPage() {
           >
             <span className="nav-icon">📜</span>
             <span>Audit Logs</span>
+          </button>
+          <button
+            className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+            onClick={() => setActiveTab('settings')}
+          >
+            <span className="nav-icon">⚙️</span>
+            <span>Bot Settings</span>
           </button>
         </nav>
 
@@ -786,37 +848,106 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* TAB 3: OVERVIEW */}
-          {activeTab === 'overview' && (
-            <div className="stats-grid">
-              <div className="stat-card">
-                <div className="stat-icon purple">🤖</div>
-                <div className="stat-info">
-                  <span className="stat-title">Bot Status</span>
-                  <h3 className="stat-value">Connected</h3>
-                  <p className="stat-sub">FYP Project#0105</p>
+          {/* TAB: BOT SETTINGS (Inbox Channel) */}
+          {activeTab === 'settings' && (
+            <>
+              <div className="welcome-banner">
+                <div className="welcome-text">
+                  <h1>Bot Settings</h1>
+                  <p>Configure the Inbox channel — all customer DMs and support replies go here.</p>
                 </div>
+                {isInboxDirty && (
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleSaveInbox}
+                    disabled={isSavingInbox}
+                    style={{ animation: 'pulse 1.8s infinite', boxShadow: '0 0 15px rgba(99,102,241,0.6)' }}
+                  >
+                    {isSavingInbox ? 'Saving...' : '💾 Save Changes'}
+                  </button>
+                )}
               </div>
-              <div className="stat-card">
-                <div className="stat-icon blue">💬</div>
-                <div className="stat-info">
-                  <span className="stat-title">Customer Chats</span>
-                  <h3 className="stat-value">{conversations.length} Active</h3>
-                  <p className="stat-sub">Live DMs bridge active</p>
+
+              <div style={{ maxWidth: '680px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+                {/* Inbox Channel Card */}
+                <div className="editor-card">
+                  <div className="editor-card-header">
+                    <div className="editor-title">
+                      <h3>📥 Inbox Channel</h3>
+                      <p>Every customer DM and every reply you send will be logged here on Discord</p>
+                    </div>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">
+                      <span>Inbox Channel ID</span>
+                      <span className="form-label-desc">Paste the Discord channel ID (right-click channel → Copy ID)</span>
+                    </label>
+                    <input
+                      id="inbox-channel-id"
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. 1234567890123456789"
+                      value={inboxConfig.channelId || ''}
+                      onChange={(e) => setInboxConfig({ ...inboxConfig, channelId: e.target.value })}
+                      onBlur={() => saveInboxDirectly(inboxConfig)}
+                    />
+                  </div>
+
+                  {/* Status indicator */}
+                  <div style={{
+                    marginTop: '0.75rem',
+                    padding: '0.85rem 1rem',
+                    borderRadius: 'var(--radius-md)',
+                    background: inboxConfig.channelId ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)',
+                    border: `1px solid ${inboxConfig.channelId ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.6rem',
+                    fontSize: '0.85rem',
+                  }}>
+                    <span style={{ fontSize: '1.1rem' }}>{inboxConfig.channelId ? '✅' : '⚠️'}</span>
+                    <span style={{ color: inboxConfig.channelId ? '#10b981' : '#f59e0b', fontWeight: 600 }}>
+                      {inboxConfig.channelId
+                        ? `Inbox set to channel ID: ${inboxConfig.channelId}`
+                        : 'No inbox channel set — messages will not be forwarded to Discord'}
+                    </span>
+                  </div>
                 </div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-icon green">👋</div>
-                <div className="stat-info">
-                  <span className="stat-title">Welcome Messages</span>
-                  <h3 className="stat-value">{config.enabled ? 'Enabled' : 'Disabled'}</h3>
-                  <p className="stat-sub">Target: #{config.channelId || 'welcome'}</p>
+
+                {/* How it works card */}
+                <div className="editor-card" style={{ background: 'var(--bg-secondary)' }}>
+                  <div className="editor-title" style={{ marginBottom: '1rem' }}>
+                    <h3>💡 How the Inbox Works</h3>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', fontSize: '0.875rem', color: 'var(--text-sub)', lineHeight: 1.6 }}>
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>📩</span>
+                      <span>When a <b>customer DMs the bot</b>, the message is forwarded to this Inbox channel as an embed, showing their username and ID.</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>📤</span>
+                      <span>When you <b>reply from the dashboard</b> or use <code>/reply</code>, the reply also gets logged here so your team can track everything.</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>🔔</span>
+                      <span>Use Discord's <b>notification settings</b> on this channel to get instant alerts when customers reach out.</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>⌨️</span>
+                      <span>You can also use <code>/reply userid:&lt;ID&gt; message:&lt;text&gt;</code> directly in Discord to send a DM and log it here.</span>
+                    </div>
+                  </div>
                 </div>
+
               </div>
-            </div>
+            </>
           )}
+
         </div>
       </main>
     </div>
   );
 }
+

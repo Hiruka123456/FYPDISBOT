@@ -2,18 +2,33 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 
-// Path to shared chatHistory.json
-const possibleChatPaths = [
-  path.resolve(process.cwd(), '..', 'bot', 'chatHistory.json'),
-  path.resolve('F:', 'FYPDISBOT', 'bot', 'chatHistory.json'),
-  path.resolve(process.cwd(), 'chatHistory.json'),
+// Path to shared chatHistory.json and inboxConfig.json
+const possibleBotDirs = [
+  path.resolve(process.cwd(), '..', 'bot'),
+  path.resolve('F:', 'FYPDISBOT', 'bot'),
+  process.cwd(),
 ];
 
-function getChatHistoryPath() {
-  for (const p of possibleChatPaths) {
-    if (fs.existsSync(p)) return p;
+function getBotDir() {
+  for (const d of possibleBotDirs) {
+    if (fs.existsSync(path.join(d, 'chatHistory.json'))) return d;
   }
-  return possibleChatPaths[0];
+  return possibleBotDirs[0];
+}
+
+function getChatHistoryPath() {
+  return path.join(getBotDir(), 'chatHistory.json');
+}
+
+function getInboxChannelId() {
+  try {
+    const p = path.join(getBotDir(), 'inboxConfig.json');
+    if (fs.existsSync(p)) {
+      const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+      return cfg.channelId || '';
+    }
+  } catch {}
+  return '';
 }
 
 let inMemoryHistory = {
@@ -76,7 +91,6 @@ async function sendDiscordDM(token, userId, messageContent) {
   if (!token || !userId || !messageContent) {
     throw new Error('Missing token, userId, or messageContent');
   }
-
   // 1. Open or get existing DM channel with user
   const channelRes = await fetch('https://discord.com/api/v10/users/@me/channels', {
     method: 'POST',
@@ -86,16 +100,14 @@ async function sendDiscordDM(token, userId, messageContent) {
     },
     body: JSON.stringify({ recipient_id: userId }),
   });
-
   if (!channelRes.ok) {
     const errText = await channelRes.text();
-    throw new Error(`Failed to open DM channel with user (${userId}): ${errText}`);
+    throw new Error(`Failed to open DM channel (${userId}): ${errText}`);
   }
-
   const channelData = await channelRes.json();
   const dmChannelId = channelData.id;
 
-  // 2. Post the DM message into the channel
+  // 2. Post the message
   const sendRes = await fetch(`https://discord.com/api/v10/channels/${dmChannelId}/messages`, {
     method: 'POST',
     headers: {
@@ -104,13 +116,29 @@ async function sendDiscordDM(token, userId, messageContent) {
     },
     body: JSON.stringify({ content: messageContent }),
   });
-
   if (!sendRes.ok) {
     const errText = await sendRes.text();
-    throw new Error(`Failed to send message: ${errText}`);
+    throw new Error(`Failed to send DM: ${errText}`);
   }
-
   return await sendRes.json();
+}
+
+// Post a message to a Discord channel via REST
+async function postToChannel(token, channelId, payload) {
+  if (!token || !channelId) return false;
+  try {
+    const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bot ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 // Fetch Discord User Profile via REST API
@@ -146,7 +174,7 @@ export async function POST(request) {
       let discordError = null;
       if (token && /^\d{15,22}$/.test(userId)) {
         try {
-          await sendDiscordDM(token, userId, text);
+          await sendDiscordDM(token, userId, `📨 **Support Reply:** ${text}`);
           discordSent = true;
         } catch (err) {
           discordError = err.message;
@@ -173,13 +201,30 @@ export async function POST(request) {
       const newMsg = {
         id: `msg-${Date.now()}`,
         sender: 'bot',
-        senderName: 'Support Agent (Bot)',
+        senderName: 'Support Agent (Dashboard)',
         text: text.trim(),
         timestamp: now,
       };
-
       conv.messages.push(newMsg);
       writeHistory(history);
+
+      // Also forward to Inbox channel on Discord
+      const inboxChannelId = getInboxChannelId();
+      if (inboxChannelId && token) {
+        const customerName = conv.username || userId;
+        await postToChannel(token, inboxChannelId, {
+          embeds: [{
+            color: 0x10b981,
+            author: { name: `📤 Dashboard Reply to ${customerName}` },
+            description:
+              `**To:** <@${userId}> (\`${userId}\`)\n` +
+              `**From:** Dashboard Support Agent\n\n` +
+              `> ${text}\n\n` +
+              (discordSent ? '✅ DM delivered to customer' : `⚠️ DM failed: ${discordError}`),
+            timestamp: now,
+          }],
+        });
+      }
 
       return NextResponse.json({
         success: true,
