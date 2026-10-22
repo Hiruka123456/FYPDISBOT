@@ -184,31 +184,42 @@ export async function POST(request) {
     if (body.action === 'start') {
       const { target, initialMessage } = body;
       if (!target?.trim()) {
-        return NextResponse.json({ error: 'Please provide a User ID' }, { status: 400 });
+        return NextResponse.json({ error: 'Please provide a Discord User ID' }, { status: 400 });
       }
 
       const cleanTarget = target.trim().replace(/[<@!>]/g, '');
       const firstMsg = initialMessage?.trim() || 'Hello! How can we assist you today?';
-      const history = readHistory();
 
+      // Validate numeric Discord Snowflake ID
+      if (!/^\d{15,22}$/.test(cleanTarget)) {
+        return NextResponse.json({
+          error: 'Invalid User ID! You must enter a numeric Discord User ID (17-20 digits). Discord cannot send DMs by username. Example: 496682662522519563',
+        }, { status: 400 });
+      }
+
+      if (!token) {
+        return NextResponse.json({
+          error: 'DISCORD_TOKEN is missing in web/.env. Please configure your bot token.',
+        }, { status: 500 });
+      }
+
+      const history = readHistory();
       let userId = cleanTarget;
       let username = cleanTarget;
       let avatar = '';
 
-      // Fetch Discord user profile if valid ID
-      if (token && /^\d{15,22}$/.test(cleanTarget)) {
-        const discordUser = await fetchDiscordUser(token, cleanTarget);
-        if (discordUser) {
-          if (discordUser.bot) {
-            return NextResponse.json({
-              error: `This User ID belongs to a bot (@${discordUser.username})! Discord bots cannot DM other bots or themselves. Please enter a real customer's Discord User ID.`,
-            }, { status: 400 });
-          }
-          userId = discordUser.id;
-          username = discordUser.global_name || discordUser.username;
-          if (discordUser.avatar) {
-            avatar = `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`;
-          }
+      // Fetch Discord user profile
+      const discordUser = await fetchDiscordUser(token, cleanTarget);
+      if (discordUser) {
+        if (discordUser.bot) {
+          return NextResponse.json({
+            error: `This User ID belongs to a bot (@${discordUser.username})! Discord bots cannot DM other bots or themselves. Please enter a real customer's Discord User ID.`,
+          }, { status: 400 });
+        }
+        userId = discordUser.id;
+        username = discordUser.global_name || discordUser.username;
+        if (discordUser.avatar) {
+          avatar = `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`;
         }
       }
 
@@ -217,6 +228,8 @@ export async function POST(request) {
         conv = { userId, username, avatar, lastMessage: firstMsg, lastUpdated: now, messages: [] };
         history.conversations.unshift(conv);
       } else {
+        conv.username = username || conv.username;
+        if (avatar) conv.avatar = avatar;
         conv.lastMessage = firstMsg;
         conv.lastUpdated = now;
       }
@@ -225,17 +238,15 @@ export async function POST(request) {
       conv.messages.push(newMsg);
       writeHistory(history);
 
-      // Send DM
+      // Send DM to user
       let dmSent = false;
       let dmError = null;
-      if (token && /^\d{15,22}$/.test(userId)) {
-        try {
-          await sendDiscordDM(token, userId, `📨 **Support:** ${firstMsg}`);
-          dmSent = true;
-        } catch (e) {
-          dmError = e.message;
-          console.error('[chats API] start DM error:', e.message);
-        }
+      try {
+        await sendDiscordDM(token, userId, `📨 **Support:** ${firstMsg}`);
+        dmSent = true;
+      } catch (e) {
+        dmError = e.message;
+        console.error('[chats API] start DM error:', e.message);
       }
 
       // Forward to inbox channel
@@ -255,10 +266,10 @@ export async function POST(request) {
         success: true,
         conversation: conv,
         dmSent,
-        dmError,
+        dmError: dmError || null,
         note: dmSent
           ? '✅ Chat started & message sent to customer on Discord!'
-          : `⚠️ Chat created in dashboard (DM not delivered: ${dmError})`,
+          : `⚠️ Chat created in dashboard (DM not delivered: ${dmError || 'DMs closed or mutual server missing'})`,
       });
     }
 
