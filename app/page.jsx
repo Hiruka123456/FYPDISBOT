@@ -11,12 +11,12 @@ const PRESET_BANNERS = [
 
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState('welcome');
-  const [ping, setPing] = useState('< 10 ms');
   const [serverStatus, setServerStatus] = useState('Checking...');
   const [toastMessage, setToastMessage] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Welcome Message State
+  // Initial / Saved State vs Current Edited State for dirty check
+  const [savedConfig, setSavedConfig] = useState(null);
   const [config, setConfig] = useState({
     enabled: true,
     channelId: '',
@@ -25,6 +25,13 @@ export default function DashboardPage() {
     imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
     embedColor: '#6366f1',
   });
+
+  // Calculate if there are unsaved modifications
+  const isDirty = Boolean(
+    savedConfig &&
+    config &&
+    JSON.stringify(config) !== JSON.stringify(savedConfig)
+  );
 
   // Fetch initial welcome config and health status
   useEffect(() => {
@@ -37,12 +44,12 @@ export default function DashboardPage() {
 
         if (statusRes.ok) {
           setServerStatus('Dashboard Online');
-          setPing('8 ms');
         }
 
         if (configRes.ok) {
           const data = await configRes.json();
-          setConfig((prev) => ({ ...prev, ...data }));
+          setConfig(data);
+          setSavedConfig(data);
         }
       } catch {
         setServerStatus('Offline / Local');
@@ -57,6 +64,7 @@ export default function DashboardPage() {
   };
 
   const handleSave = async () => {
+    if (!isDirty) return;
     setIsSaving(true);
     try {
       const res = await fetch('/api/welcome', {
@@ -66,7 +74,8 @@ export default function DashboardPage() {
       });
 
       if (res.ok) {
-        showToast('✅ Welcome message settings saved successfully!');
+        setSavedConfig(config); // Reset dirty state, button disappears!
+        showToast('✅ Changes saved successfully!');
       } else {
         showToast('❌ Failed to save configuration.');
       }
@@ -173,7 +182,7 @@ export default function DashboardPage() {
 
       {/* Main Content Area */}
       <main className="main-content">
-        {/* Topbar */}
+        {/* Topbar (No duplicate save button) */}
         <header className="topbar">
           <div className="topbar-search">
             <span className="search-icon">🔍</span>
@@ -185,23 +194,33 @@ export default function DashboardPage() {
               <span className="bot-status-ring"></span>
               <span>Bot: FYP Project#0105</span>
             </div>
-            <button className="btn btn-primary" onClick={handleSave} disabled={isSaving}>
-              <span>{isSaving ? 'Saving...' : '💾 Save Changes'}</span>
-            </button>
           </div>
         </header>
 
         {/* Dashboard Body */}
         <div className="dashboard-body">
-          {/* Banner */}
+          {/* Banner with ONLY ONE conditional save button */}
           <div className="welcome-banner">
             <div className="welcome-text">
               <h1>Welcome Message Studio</h1>
               <p>Customize the automated greeting, image banner, embed styling, and target channel for new Discord members.</p>
             </div>
-            <button className="btn btn-secondary" onClick={handleSave}>
-              Save Config
-            </button>
+
+            {/* ONLY ONE Save Button: visible ONLY when something changed! */}
+            {isDirty && (
+              <button
+                className="btn btn-primary"
+                onClick={handleSave}
+                disabled={isSaving}
+                style={{
+                  animation: 'pulse 1.8s infinite',
+                  whiteSpace: 'nowrap',
+                  boxShadow: '0 0 15px rgba(99, 102, 241, 0.6)'
+                }}
+              >
+                <span>{isSaving ? 'Saving...' : '💾 Save Changes'}</span>
+              </button>
+            )}
           </div>
 
           {/* Welcome Editor Grid */}
@@ -395,8 +414,8 @@ export default function DashboardPage() {
                 {/* Helpful instructions */}
                 <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
                   <p style={{ fontWeight: '600', color: 'var(--text-main)', marginBottom: '0.4rem' }}>💡 Quick Tips:</p>
-                  <p>• Type <code>!testwelcome</code> in any channel in your Discord server to test this card instantly.</p>
-                  <p style={{ marginTop: '0.25rem' }}>• To find a Channel ID: In Discord, go to Settings &gt; Advanced &gt; turn on <b>Developer Mode</b>, then right-click any channel and click <b>Copy Channel ID</b>.</p>
+                  <p>• Type <code>!testwelcome</code> in any Discord channel to test this card instantly.</p>
+                  <p style={{ marginTop: '0.25rem' }}>• To get a Channel ID: In Discord, go to Settings &gt; Advanced &gt; turn on <b>Developer Mode</b>, then right-click your welcome channel and click <b>Copy Channel ID</b>.</p>
                 </div>
               </div>
             </div>
