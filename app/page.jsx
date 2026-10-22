@@ -48,7 +48,7 @@ export default function DashboardPage() {
   // Server Audit Logs State
   const [logsConfig, setLogsConfig] = useState({
     globalEnabled: true,
-    defaultChannelId: '',
+    defaultChannelId: '1562687171079708784',
     categories: {
       messages: { enabled: true, channelId: '', name: 'Message Events', description: 'Message deletions, edits, and bulk message purges', icon: '💬' },
       members: { enabled: true, channelId: '', name: 'Member Events', description: 'Member joins, leaves, role assignments, and nickname changes', icon: '👥' },
@@ -64,6 +64,7 @@ export default function DashboardPage() {
   const [logsCategoryFilter, setLogsCategoryFilter] = useState('all');
   const [logsSubView, setLogsSubView] = useState('settings'); // 'settings' | 'feed'
   const [isSavingLogs, setIsSavingLogs] = useState(false);
+  const [isTestingLogs, setIsTestingLogs] = useState(false);
   const [logsSearch, setLogsSearch] = useState('');
 
   const messageEndRef = useRef(null);
@@ -128,10 +129,31 @@ export default function DashboardPage() {
 
         if (logsRes.ok) {
           const logsData = await logsRes.json();
-          if (logsData?.config) {
-            setLogsConfig(logsData.config);
-            setSavedLogsConfig(logsData.config);
+          let mergedConfig = logsData?.config || {};
+
+          // Read client-side localStorage backup so Vercel refresh never wipes settings
+          try {
+            const cached = localStorage.getItem('modportal_logs_config');
+            if (cached) {
+              const parsedCache = JSON.parse(cached);
+              mergedConfig = {
+                ...mergedConfig,
+                ...parsedCache,
+                defaultChannelId: parsedCache.defaultChannelId || mergedConfig.defaultChannelId || '1562687171079708784',
+                categories: {
+                  ...(mergedConfig.categories || {}),
+                  ...(parsedCache.categories || {}),
+                },
+              };
+            }
+          } catch {}
+
+          if (!mergedConfig.defaultChannelId || mergedConfig.defaultChannelId === '1562655416062705815') {
+            mergedConfig.defaultChannelId = '1562687171079708784';
           }
+
+          setLogsConfig(mergedConfig);
+          setSavedLogsConfig(mergedConfig);
           if (Array.isArray(logsData?.recentLogs)) {
             setRecentLogs(logsData.recentLogs);
           }
@@ -280,6 +302,9 @@ export default function DashboardPage() {
     const cfgToSave = overrideCfg || logsConfig;
     setIsSavingLogs(true);
     try {
+      try {
+        localStorage.setItem('modportal_logs_config', JSON.stringify(cfgToSave));
+      } catch {}
       const res = await fetch('/api/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -297,6 +322,29 @@ export default function DashboardPage() {
       showToast(`❌ Error: ${err.message}`);
     } finally {
       setIsSavingLogs(false);
+    }
+  };
+
+  // Test Audit Log in Discord
+  const handleTestLogs = async (targetChannelId) => {
+    setIsTestingLogs(true);
+    const ch = (targetChannelId || logsConfig.defaultChannelId || '1562687171079708784').trim();
+    try {
+      const res = await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test', channelId: ch }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast('🚀 Test audit log posted to Discord channel!');
+      } else {
+        showToast(`❌ Discord test error: ${data.error || 'Failed to send'}`);
+      }
+    } catch (err) {
+      showToast(`❌ Test error: ${err.message}`);
+    } finally {
+      setIsTestingLogs(false);
     }
   };
 
@@ -1118,48 +1166,98 @@ export default function DashboardPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
 
                   {/* Master / Default Log Channel */}
-                  <div className="editor-card" style={{ border: '1px solid var(--border-glow)' }}>
-                    <div className="editor-card-header">
-                      <div className="editor-title">
-                        <h3>🌐 Master Log Channel</h3>
-                        <p>All categories will route to this channel by default unless a specific channel ID is set below.</p>
+                    <div className="editor-card" style={{ border: '1px solid var(--border-glow)' }}>
+                      <div className="editor-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div className="editor-title">
+                          <h3>🌐 Master Log Channel</h3>
+                          <p>All categories will route to this channel by default unless a specific channel ID is set below.</p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                            onClick={() => handleTestLogs(logsConfig.defaultChannelId)}
+                            disabled={isTestingLogs}
+                          >
+                            <span>{isTestingLogs ? '⏳' : '🧪'}</span>
+                            <span>{isTestingLogs ? 'Testing...' : 'Test Channel in Discord'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            style={{ fontSize: '0.8rem', padding: '6px 12px' }}
+                            onClick={() => handleSaveLogs()}
+                            disabled={isSavingLogs}
+                          >
+                            {isSavingLogs ? 'Saving...' : '💾 Save Channel'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="form-group" style={{ maxWidth: '620px' }}>
+                        <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>Master Channel ID</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = { ...logsConfig, defaultChannelId: '1562687171079708784' };
+                              setLogsConfig(updated);
+                              handleSaveLogs(updated);
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'var(--primary)',
+                              fontSize: '0.75rem',
+                              cursor: 'pointer',
+                              fontWeight: 600,
+                              textDecoration: 'underline',
+                            }}
+                          >
+                            ⚡ Auto-Fill #logs (1562687171079708784)
+                          </button>
+                        </label>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <input
+                            type="text"
+                            className="form-input"
+                            placeholder="e.g. 1562687171079708784 (#logs)"
+                            value={logsConfig.defaultChannelId || ''}
+                            onChange={(e) => setLogsConfig({ ...logsConfig, defaultChannelId: e.target.value })}
+                            onBlur={() => handleSaveLogs()}
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{
+                        marginTop: '0.75rem',
+                        padding: '0.75rem 1rem',
+                        borderRadius: 'var(--radius-md)',
+                        background: logsConfig.defaultChannelId ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)',
+                        border: `1px solid ${logsConfig.defaultChannelId ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}`,
+                        fontSize: '0.85rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '0.5rem',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span>{logsConfig.defaultChannelId ? '✅' : '💡'}</span>
+                          <span style={{ color: logsConfig.defaultChannelId ? '#10b981' : '#f59e0b', fontWeight: 500 }}>
+                            {logsConfig.defaultChannelId
+                              ? `Master channel active: ${logsConfig.defaultChannelId} (#logs)`
+                              : 'No channel set. Click "Auto-Fill #logs" above or type your Channel ID.'}
+                          </span>
+                        </div>
+                        {logsConfig.defaultChannelId && (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-sub)' }}>
+                            Persisted & Synced across refreshes
+                          </span>
+                        )}
                       </div>
                     </div>
-
-                    <div className="form-group" style={{ maxWidth: '520px' }}>
-                      <label className="form-label">
-                        <span>Master Channel ID</span>
-                        <span className="form-label-desc">Right-click channel in Discord → Copy Channel ID</span>
-                      </label>
-                      <input
-                        type="text"
-                        className="form-input"
-                        placeholder="e.g. 1562655416062705815 (e.g. #logs or #audit-logs)"
-                        value={logsConfig.defaultChannelId || ''}
-                        onChange={(e) => setLogsConfig({ ...logsConfig, defaultChannelId: e.target.value })}
-                        onBlur={() => handleSaveLogs()}
-                      />
-                    </div>
-
-                    <div style={{
-                      marginTop: '0.75rem',
-                      padding: '0.75rem 1rem',
-                      borderRadius: 'var(--radius-md)',
-                      background: logsConfig.defaultChannelId ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)',
-                      border: `1px solid ${logsConfig.defaultChannelId ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}`,
-                      fontSize: '0.85rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                    }}>
-                      <span>{logsConfig.defaultChannelId ? '✅' : '💡'}</span>
-                      <span style={{ color: logsConfig.defaultChannelId ? '#10b981' : '#f59e0b' }}>
-                        {logsConfig.defaultChannelId
-                          ? `Master channel active: ${logsConfig.defaultChannelId}`
-                          : 'No master channel set. You can set one here, per category below, or use /setlogs in Discord.'}
-                      </span>
-                    </div>
-                  </div>
 
                   {/* Category Grid */}
                   <div>
@@ -1215,14 +1313,32 @@ export default function DashboardPage() {
                               </div>
 
                               <div className="form-group" style={{ marginTop: '0.75rem' }}>
-                                <label className="form-label" style={{ fontSize: '0.75rem' }}>
-                                  <span>Custom Channel ID (Optional Override)</span>
-                                </label>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 0 }}>
+                                    <span>Custom Channel ID (Optional Override)</span>
+                                  </label>
+                                  {cat.channelId && cat.channelId.trim() && (
+                                    <button
+                                      type="button"
+                                      style={{
+                                        background: 'none',
+                                        border: 'none',
+                                        color: '#818cf8',
+                                        fontSize: '0.72rem',
+                                        cursor: 'pointer',
+                                        fontWeight: 600,
+                                      }}
+                                      onClick={() => handleTestLogs(cat.channelId)}
+                                    >
+                                      🧪 Test Channel
+                                    </button>
+                                  )}
+                                </div>
                                 <input
                                   type="text"
                                   className="form-input"
-                                  style={{ fontSize: '0.82rem', padding: '0.5rem 0.75rem' }}
-                                  placeholder={logsConfig.defaultChannelId ? `Inherits Master (${logsConfig.defaultChannelId})` : 'e.g. 1562655416062705815'}
+                                  style={{ fontSize: '0.82rem', padding: '0.5rem 0.75rem', marginTop: '4px' }}
+                                  placeholder={logsConfig.defaultChannelId ? `Inherits Master (${logsConfig.defaultChannelId})` : 'e.g. 1562687171079708784'}
                                   value={cat.channelId || ''}
                                   onChange={(e) => {
                                     setLogsConfig({
