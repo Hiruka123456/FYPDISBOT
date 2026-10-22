@@ -248,14 +248,14 @@ export default function DashboardPage() {
       });
 
       const data = await res.json();
-      if (res.ok) {
+      if (res.ok && data.success) {
         const refreshed = await fetch('/api/chats').then((r) => r.json());
         if (refreshed?.conversations) {
           setConversations(refreshed.conversations);
         }
-        showToast(data.discordNote || '✅ Reply dispatched to customer on Discord!');
+        showToast(data.note || (data.dmSent ? '✅ Reply sent to customer on Discord!' : '✅ Reply saved (DM may be blocked by customer)'));
       } else {
-        showToast(`❌ Error: ${data.error}`);
+        showToast(`❌ Error: ${data.error || 'Unknown error'}`);
       }
     } catch (err) {
       showToast(`❌ Failed to send reply: ${err.message}`);
@@ -282,17 +282,24 @@ export default function DashboardPage() {
       });
 
       const data = await res.json();
-      if (res.ok && data.conversation) {
+      if (res.ok && data.success) {
+        // Refresh conversations list
         const refreshed = await fetch('/api/chats').then((r) => r.json());
         if (refreshed?.conversations) {
           setConversations(refreshed.conversations);
         }
-        setActiveUserId(data.conversation.userId);
+        // Select the new conversation
+        if (data.conversation?.userId) {
+          setActiveUserId(data.conversation.userId);
+        }
         setIsNewChatModalOpen(false);
         setNewChatTarget('');
-        showToast('✅ Conversation started with customer!');
+        setNewChatMsg('Hello! How can we help you today?');
+        showToast(data.dmSent
+          ? '✅ Chat started & message sent to customer!'
+          : '✅ Chat created! (DM may be blocked by customer)');
       } else {
-        showToast(`❌ Error: ${data.error}`);
+        showToast(`❌ Error: ${data.error || 'Could not start conversation'}`);
       }
     } catch (err) {
       showToast(`❌ Failed: ${err.message}`);
