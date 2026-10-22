@@ -209,16 +209,31 @@ export async function POST(request) {
 
       // Send DM
       let dmSent = false;
+      let dmError = null;
       if (token && /^\d{15,22}$/.test(userId)) {
         try {
           await sendDiscordDM(token, userId, `📨 **Support:** ${firstMsg}`);
           dmSent = true;
         } catch (e) {
+          dmError = e.message;
           console.error('[chats API] start DM error:', e.message);
         }
       }
 
-      return NextResponse.json({ success: true, conversation: conv, dmSent });
+      // Forward to inbox channel
+      const inboxId = getInboxChannelId();
+      if (inboxId && token) {
+        await postToInboxChannel(token, inboxId, {
+          color: 0x6366f1,
+          author: { name: `🆕 New Chat Started with ${conv.username}` },
+          description:
+            `**To:** <@${userId}> (\`${userId}\`)\n**Initiated by:** Dashboard Support\n\n> ${firstMsg}\n\n` +
+            (dmSent ? '✅ DM delivered to customer' : `⚠️ DM failed: ${dmError || 'DM blocked / unavailable'}`),
+          timestamp: now,
+        });
+      }
+
+      return NextResponse.json({ success: true, conversation: conv, dmSent, dmError });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
