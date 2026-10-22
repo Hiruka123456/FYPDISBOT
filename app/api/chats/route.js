@@ -144,41 +144,54 @@ function getDiscordToken() {
 
 function parseInboxEmbed(embed, msgTime, msgId) {
   if (!embed || !embed.description) return null;
-  const desc = embed.description;
+  const desc = embed.description || '';
   const authorName = embed.author?.name || '';
   const avatar = embed.author?.icon_url || '';
 
-  // Case 1: Customer DM
-  if (authorName.includes('DM from')) {
-    const idMatch = desc.match(/\(ID:\s*`?(\d{15,22})`?\)/);
-    const textMatch = desc.match(/\n\n>\s*([\s\S]+?)$/);
-    if (idMatch) {
-      const userId = idMatch[1];
-      const username = authorName.replace(/^📩\s*DM from\s*/, '').trim() || ('User-' + userId.slice(-4));
-      const text = textMatch ? textMatch[1].trim() : desc;
-      return {
-        userId, username, avatar, text, sender: 'customer', senderName: username,
-        timestamp: embed.timestamp || msgTime, id: msgId
-      };
-    }
-  }
+  const idMatch = desc.match(/\(ID:\s*[`'"]?(\d{15,22})[`'"]?\)/) ||
+                  desc.match(/\*\*To:\*\*\s*<@!?(\d{15,22})>/) ||
+                  desc.match(/<@!?(\d{15,22})>/) ||
+                  desc.match(/\b(\d{17,20})\b/);
 
-  // Case 2: Staff Reply or New Chat
-  if (authorName.includes('Reply') || authorName.includes('New Chat')) {
-    const idMatch = desc.match(/\*\*To:\*\*\s*<@!?(\d{15,22})>/) || desc.match(/\(`?(\d{15,22})`?\)/);
-    const textMatch = desc.match(/\n\n>\s*([\s\S]+?)(?:\n\n[✅⚠️]|$)/);
-    if (idMatch) {
-      const userId = idMatch[1];
-      let username = authorName.replace(/^📤\s*(?:Dashboard )?Reply (?:→|to)\s*/, '')
-                               .replace(/^🆕\s*New Chat Started with\s*/, '').trim() || ('User-' + userId.slice(-4));
-      const text = textMatch ? textMatch[1].trim() : '';
-      return {
-        userId, username, avatar: '', text, sender: 'bot', senderName: 'Support Agent',
-        timestamp: embed.timestamp || msgTime, id: msgId
-      };
-    }
+  if (!idMatch) return null;
+  const userId = idMatch[1];
+
+  const textMatch = desc.match(/\n\n>\s*([\s\S]+?)(?:\n\n[✅⚠️]|$)/) ||
+                    desc.match(/>\s*([\s\S]+?)(?:\n\n[✅⚠️]|$)/);
+  const text = textMatch ? textMatch[1].trim() : desc.trim();
+
+  const isReply = authorName.toLowerCase().includes('reply') ||
+                  authorName.toLowerCase().includes('new chat') ||
+                  desc.includes('**From:**') ||
+                  desc.includes('Dashboard Support');
+
+  if (isReply) {
+    let username = authorName.replace(/^📤\s*(?:Dashboard )?Reply (?:→|to)\s*/i, '')
+                             .replace(/^🆕\s*New Chat Started with\s*/i, '').trim() || ('User-' + userId.slice(-4));
+    return {
+      userId,
+      username,
+      avatar: '',
+      text,
+      sender: 'bot',
+      senderName: 'Support Agent',
+      timestamp: embed.timestamp || msgTime,
+      id: msgId,
+    };
+  } else {
+    const username = authorName.replace(/^📩\s*DM from\s*/i, '').trim() ||
+                     (desc.match(/^\*\*([^*]+)\*\*/)?.[1]?.replace(/#\d+$/, '') || ('User-' + userId.slice(-4)));
+    return {
+      userId,
+      username,
+      avatar,
+      text,
+      sender: 'customer',
+      senderName: username,
+      timestamp: embed.timestamp || msgTime,
+      id: msgId,
+    };
   }
-  return null;
 }
 
 // ─── GET: Return all conversations (synced with Discord #inbox) ─────────────────
