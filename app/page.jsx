@@ -45,10 +45,37 @@ export default function DashboardPage() {
   const [savedInboxConfig, setSavedInboxConfig] = useState(null);
   const [isSavingInbox, setIsSavingInbox] = useState(false);
 
+  // Server Audit Logs State
+  const [logsConfig, setLogsConfig] = useState({
+    globalEnabled: true,
+    defaultChannelId: '',
+    categories: {
+      messages: { enabled: true, channelId: '', name: 'Message Events', description: 'Message deletions, edits, and bulk message purges', icon: '💬' },
+      members: { enabled: true, channelId: '', name: 'Member Events', description: 'Member joins, leaves, role assignments, and nickname changes', icon: '👥' },
+      moderation: { enabled: true, channelId: '', name: 'Moderation Events', description: 'Bans, unbans, kicks, and timeouts / mutes', icon: '🔨' },
+      channels: { enabled: true, channelId: '', name: 'Channel Events', description: 'Channel creations, deletions, and permission changes', icon: '📁' },
+      roles: { enabled: true, channelId: '', name: 'Role Events', description: 'Role creations, deletions, and permission modifications', icon: '🏷️' },
+      voice: { enabled: true, channelId: '', name: 'Voice Events', description: 'Voice channel joins, leaves, and channel switches', icon: '🔊' },
+      server: { enabled: true, channelId: '', name: 'Server Updates', description: 'Server name, icon, invite, and community updates', icon: '🌐' },
+    },
+  });
+  const [savedLogsConfig, setSavedLogsConfig] = useState(null);
+  const [recentLogs, setRecentLogs] = useState([]);
+  const [logsCategoryFilter, setLogsCategoryFilter] = useState('all');
+  const [logsSubView, setLogsSubView] = useState('settings'); // 'settings' | 'feed'
+  const [isSavingLogs, setIsSavingLogs] = useState(false);
+  const [logsSearch, setLogsSearch] = useState('');
+
   const messageEndRef = useRef(null);
   // configRef keeps a live reference to config to avoid stale closures in onBlur handlers
   const configRef = useRef(config);
   useEffect(() => { configRef.current = config; }, [config]);
+
+  // Check if logs config was modified
+  const isLogsDirty = Boolean(
+    savedLogsConfig &&
+    JSON.stringify(logsConfig) !== JSON.stringify(savedLogsConfig)
+  );
 
   // Check if inbox config was modified
   const isInboxDirty = Boolean(
@@ -63,15 +90,16 @@ export default function DashboardPage() {
     JSON.stringify(config) !== JSON.stringify(savedConfig)
   );
 
-  // Fetch initial welcome config, server status, chats & inbox config
+  // Fetch initial welcome config, server status, chats, inbox config & logs
   useEffect(() => {
     async function loadInitial() {
       try {
-        const [statusRes, configRes, chatsRes, inboxRes] = await Promise.all([
+        const [statusRes, configRes, chatsRes, inboxRes, logsRes] = await Promise.all([
           fetch('/api/status'),
           fetch('/api/welcome'),
           fetch('/api/chats'),
           fetch('/api/inbox'),
+          fetch('/api/logs'),
         ]);
 
         if (statusRes.ok) setServerStatus('Dashboard Online');
@@ -97,6 +125,17 @@ export default function DashboardPage() {
           setInboxConfig(inboxData);
           setSavedInboxConfig(inboxData);
         }
+
+        if (logsRes.ok) {
+          const logsData = await logsRes.json();
+          if (logsData?.config) {
+            setLogsConfig(logsData.config);
+            setSavedLogsConfig(logsData.config);
+          }
+          if (Array.isArray(logsData?.recentLogs)) {
+            setRecentLogs(logsData.recentLogs);
+          }
+        }
       } catch {
         setServerStatus('Offline / Local');
       }
@@ -104,15 +143,24 @@ export default function DashboardPage() {
     loadInitial();
   }, []);
 
-  // Poll chats periodically
+  // Poll chats and logs periodically
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch('/api/chats');
-        if (res.ok) {
-          const data = await res.json();
+        const [resChats, resLogs] = await Promise.all([
+          fetch('/api/chats'),
+          fetch('/api/logs'),
+        ]);
+        if (resChats.ok) {
+          const data = await resChats.json();
           if (data?.conversations) {
             setConversations(data.conversations);
+          }
+        }
+        if (resLogs.ok) {
+          const logsData = await resLogs.json();
+          if (Array.isArray(logsData?.recentLogs)) {
+            setRecentLogs(logsData.recentLogs);
           }
         }
       } catch {
@@ -225,6 +273,47 @@ export default function DashboardPage() {
       });
       showToast('📥 Inbox channel saved to bot!');
     } catch {}
+  };
+
+  // Save Logs Configuration
+  const handleSaveLogs = async (overrideCfg) => {
+    const cfgToSave = overrideCfg || logsConfig;
+    setIsSavingLogs(true);
+    try {
+      const res = await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfgToSave),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setLogsConfig(data.config);
+        setSavedLogsConfig(data.config);
+        showToast('🛡️ Audit Logs settings saved and synced with Discord!');
+      } else {
+        showToast('❌ Failed to save audit logs settings.');
+      }
+    } catch (err) {
+      showToast(`❌ Error: ${err.message}`);
+    } finally {
+      setIsSavingLogs(false);
+    }
+  };
+
+  const handleToggleCategory = (catKey) => {
+    const current = logsConfig.categories?.[catKey] || {};
+    const updated = {
+      ...logsConfig,
+      categories: {
+        ...logsConfig.categories,
+        [catKey]: {
+          ...current,
+          enabled: !current.enabled,
+        },
+      },
+    };
+    setLogsConfig(updated);
+    handleSaveLogs(updated);
   };
 
   // Send Reply to Active Customer
@@ -956,6 +1045,429 @@ export default function DashboardPage() {
                 </div>
 
               </div>
+            </>
+          )}
+
+          {/* TAB: AUDIT LOGS */}
+          {activeTab === 'logs' && (
+            <>
+              {/* Header Banner */}
+              <div className="welcome-banner">
+                <div className="welcome-text">
+                  <h1>Server Audit Logs</h1>
+                  <p>Comprehensive logging for all Discord server events — track who did it, what was done, and to whom.</p>
+                </div>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                  <button
+                    className={`btn ${logsConfig.globalEnabled ? 'btn-secondary' : 'btn-danger'}`}
+                    style={{
+                      background: logsConfig.globalEnabled ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                      borderColor: logsConfig.globalEnabled ? '#10b981' : '#ef4444',
+                      color: logsConfig.globalEnabled ? '#10b981' : '#ef4444',
+                      fontWeight: 600,
+                    }}
+                    onClick={() => {
+                      const updated = { ...logsConfig, globalEnabled: !logsConfig.globalEnabled };
+                      setLogsConfig(updated);
+                      handleSaveLogs(updated);
+                    }}
+                  >
+                    {logsConfig.globalEnabled ? '🟢 System: ACTIVE' : '🔴 System: PAUSED'}
+                  </button>
+                  {isLogsDirty && (
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => handleSaveLogs()}
+                      disabled={isSavingLogs}
+                      style={{ animation: 'pulse 1.8s infinite', boxShadow: '0 0 15px rgba(99,102,241,0.6)' }}
+                    >
+                      {isSavingLogs ? 'Saving...' : '💾 Save Changes'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Sub-view switcher */}
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                <button
+                  className={`btn ${logsSubView === 'settings' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ fontSize: '0.85rem' }}
+                  onClick={() => setLogsSubView('settings')}
+                >
+                  ⚙️ Category Controls & Routing
+                </button>
+                <button
+                  className={`btn ${logsSubView === 'feed' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                  onClick={() => setLogsSubView('feed')}
+                >
+                  <span>📜 Live Audit Stream</span>
+                  <span style={{
+                    padding: '2px 7px',
+                    borderRadius: '10px',
+                    fontSize: '0.75rem',
+                    background: logsSubView === 'feed' ? 'rgba(255,255,255,0.25)' : 'rgba(99,102,241,0.2)',
+                  }}>
+                    {recentLogs.length}
+                  </span>
+                </button>
+              </div>
+
+              {/* SUB-VIEW 1: SETTINGS & ROUTING */}
+              {logsSubView === 'settings' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+                  {/* Master / Default Log Channel */}
+                  <div className="editor-card" style={{ border: '1px solid var(--border-glow)' }}>
+                    <div className="editor-card-header">
+                      <div className="editor-title">
+                        <h3>🌐 Master Log Channel</h3>
+                        <p>All categories will route to this channel by default unless a specific channel ID is set below.</p>
+                      </div>
+                    </div>
+
+                    <div className="form-group" style={{ maxWidth: '520px' }}>
+                      <label className="form-label">
+                        <span>Master Channel ID</span>
+                        <span className="form-label-desc">Right-click channel in Discord → Copy Channel ID</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="e.g. 1562655416062705815 (e.g. #logs or #audit-logs)"
+                        value={logsConfig.defaultChannelId || ''}
+                        onChange={(e) => setLogsConfig({ ...logsConfig, defaultChannelId: e.target.value })}
+                        onBlur={() => handleSaveLogs()}
+                      />
+                    </div>
+
+                    <div style={{
+                      marginTop: '0.75rem',
+                      padding: '0.75rem 1rem',
+                      borderRadius: 'var(--radius-md)',
+                      background: logsConfig.defaultChannelId ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)',
+                      border: `1px solid ${logsConfig.defaultChannelId ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}`,
+                      fontSize: '0.85rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                    }}>
+                      <span>{logsConfig.defaultChannelId ? '✅' : '💡'}</span>
+                      <span style={{ color: logsConfig.defaultChannelId ? '#10b981' : '#f59e0b' }}>
+                        {logsConfig.defaultChannelId
+                          ? `Master channel active: ${logsConfig.defaultChannelId}`
+                          : 'No master channel set. You can set one here, per category below, or use /setlogs in Discord.'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Category Grid */}
+                  <div>
+                    <h3 style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>Event Categories & Channel Routing</h3>
+                    <p style={{ color: 'var(--text-sub)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+                      Turn individual event categories ON or OFF, and choose whether they share the master channel or go to their own separate channel.
+                    </p>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1rem' }}>
+                      {Object.entries(logsConfig.categories || {}).map(([key, cat]) => {
+                        const isEnabled = cat.enabled !== false;
+                        const hasCustomChannel = Boolean(cat.channelId && cat.channelId.trim());
+                        const activeChannelId = hasCustomChannel ? cat.channelId.trim() : (logsConfig.defaultChannelId || '').trim();
+
+                        return (
+                          <div
+                            key={key}
+                            className="editor-card"
+                            style={{
+                              padding: '1.25rem',
+                              background: 'var(--bg-card)',
+                              border: `1px solid ${isEnabled ? 'var(--border-color)' : 'rgba(239,68,68,0.2)'}`,
+                              opacity: isEnabled ? 1 : 0.65,
+                              transition: 'var(--transition)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              justifyContent: 'space-between',
+                            }}
+                          >
+                            <div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                  <span style={{ fontSize: '1.4rem' }}>{cat.icon || '📌'}</span>
+                                  <div>
+                                    <h4 style={{ fontSize: '0.95rem', fontWeight: 700 }}>{cat.name}</h4>
+                                    <p style={{ fontSize: '0.78rem', color: 'var(--text-sub)', marginTop: '2px' }}>{cat.description}</p>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleCategory(key)}
+                                  className={`btn btn-sm ${isEnabled ? 'btn-primary' : 'btn-secondary'}`}
+                                  style={{
+                                    fontSize: '0.75rem',
+                                    padding: '4px 10px',
+                                    background: isEnabled ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.15)',
+                                    borderColor: isEnabled ? '#10b981' : '#ef4444',
+                                    color: isEnabled ? '#10b981' : '#ef4444',
+                                  }}
+                                >
+                                  {isEnabled ? 'Enabled' : 'Disabled'}
+                                </button>
+                              </div>
+
+                              <div className="form-group" style={{ marginTop: '0.75rem' }}>
+                                <label className="form-label" style={{ fontSize: '0.75rem' }}>
+                                  <span>Custom Channel ID (Optional Override)</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  className="form-input"
+                                  style={{ fontSize: '0.82rem', padding: '0.5rem 0.75rem' }}
+                                  placeholder={logsConfig.defaultChannelId ? `Inherits Master (${logsConfig.defaultChannelId})` : 'e.g. 1562655416062705815'}
+                                  value={cat.channelId || ''}
+                                  onChange={(e) => {
+                                    setLogsConfig({
+                                      ...logsConfig,
+                                      categories: {
+                                        ...logsConfig.categories,
+                                        [key]: { ...cat, channelId: e.target.value },
+                                      },
+                                    });
+                                  }}
+                                  onBlur={() => handleSaveLogs()}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Status indicator pill */}
+                            <div style={{
+                              marginTop: '0.75rem',
+                              padding: '0.45rem 0.75rem',
+                              borderRadius: 'var(--radius-sm)',
+                              background: !isEnabled
+                                ? 'rgba(239,68,68,0.08)'
+                                : hasCustomChannel
+                                ? 'rgba(16,185,129,0.08)'
+                                : activeChannelId
+                                ? 'rgba(99,102,241,0.08)'
+                                : 'rgba(245,158,11,0.08)',
+                              border: `1px solid ${
+                                !isEnabled
+                                  ? 'rgba(239,68,68,0.25)'
+                                  : hasCustomChannel
+                                  ? 'rgba(16,185,129,0.25)'
+                                  : activeChannelId
+                                  ? 'rgba(99,102,241,0.25)'
+                                  : 'rgba(245,158,11,0.25)'
+                              }`,
+                              fontSize: '0.75rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.4rem',
+                            }}>
+                              <span>{!isEnabled ? '🔴' : hasCustomChannel ? '🟢' : activeChannelId ? '🔵' : '🟡'}</span>
+                              <span style={{
+                                color: !isEnabled ? '#ef4444' : hasCustomChannel ? '#10b981' : activeChannelId ? '#818cf8' : '#f59e0b',
+                                fontWeight: 500,
+                              }}>
+                                {!isEnabled
+                                  ? 'Logging Disabled'
+                                  : hasCustomChannel
+                                  ? `Dedicated Channel: ${cat.channelId}`
+                                  : activeChannelId
+                                  ? `Using Master Channel: ${activeChannelId}`
+                                  : 'No Channel Set (Uses #logs fallback)'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                </div>
+              )}
+
+              {/* SUB-VIEW 2: LIVE AUDIT FEED */}
+              {logsSubView === 'feed' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                  {/* Filter & Search Bar */}
+                  <div className="editor-card" style={{ padding: '1rem' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                      {[
+                        { key: 'all', label: 'All Events', icon: '⚡' },
+                        { key: 'messages', label: 'Messages', icon: '💬' },
+                        { key: 'members', label: 'Members', icon: '👥' },
+                        { key: 'moderation', label: 'Moderation', icon: '🔨' },
+                        { key: 'channels', label: 'Channels', icon: '📁' },
+                        { key: 'roles', label: 'Roles', icon: '🏷️' },
+                        { key: 'voice', label: 'Voice', icon: '🔊' },
+                        { key: 'server', label: 'Server', icon: '🌐' },
+                      ].map((tab) => {
+                        const count = tab.key === 'all'
+                          ? recentLogs.length
+                          : recentLogs.filter((l) => l.category === tab.key).length;
+
+                        return (
+                          <button
+                            key={tab.key}
+                            type="button"
+                            onClick={() => setLogsCategoryFilter(tab.key)}
+                            style={{
+                              padding: '5px 12px',
+                              borderRadius: '20px',
+                              border: `1px solid ${logsCategoryFilter === tab.key ? 'var(--primary)' : 'var(--border-color)'}`,
+                              background: logsCategoryFilter === tab.key ? 'var(--primary)' : 'var(--bg-secondary)',
+                              color: logsCategoryFilter === tab.key ? '#fff' : 'var(--text-sub)',
+                              fontSize: '0.8rem',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              transition: 'var(--transition)',
+                            }}
+                          >
+                            <span>{tab.icon}</span>
+                            <span>{tab.label}</span>
+                            <span style={{
+                              fontSize: '0.7rem',
+                              padding: '1px 6px',
+                              borderRadius: '10px',
+                              background: logsCategoryFilter === tab.key ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.06)',
+                            }}>
+                              {count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <input
+                      type="text"
+                      className="form-input"
+                      style={{ fontSize: '0.85rem' }}
+                      placeholder="Search live events by user, action, moderator, or channel..."
+                      value={logsSearch}
+                      onChange={(e) => setLogsSearch(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Logs Event Feed */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {(() => {
+                      const filtered = recentLogs
+                        .filter((l) => logsCategoryFilter === 'all' || l.category === logsCategoryFilter)
+                        .filter((l) => {
+                          if (!logsSearch.trim()) return true;
+                          const q = logsSearch.toLowerCase();
+                          return (
+                            (l.title && l.title.toLowerCase().includes(q)) ||
+                            (l.user && l.user.toLowerCase().includes(q)) ||
+                            (l.executor && l.executor.toLowerCase().includes(q)) ||
+                            (l.channel && l.channel.toLowerCase().includes(q)) ||
+                            (l.details && l.details.toLowerCase().includes(q))
+                          );
+                        });
+
+                      if (filtered.length === 0) {
+                        return (
+                          <div className="editor-card" style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--text-sub)' }}>
+                            <span style={{ fontSize: '2.5rem', display: 'block', marginBottom: '0.75rem' }}>🛡️</span>
+                            <h4 style={{ color: 'var(--text-main)', marginBottom: '0.35rem' }}>No Audit Events Found</h4>
+                            <p style={{ fontSize: '0.85rem', maxWidth: '420px', margin: '0 auto' }}>
+                              {logsSearch ? 'No events matched your search query.' : 'Perform actions in your Discord server (delete a message, edit a channel, assign a role) to see them appear live!'}
+                            </p>
+                          </div>
+                        );
+                      }
+
+                      return filtered.map((item) => {
+                        const timeStr = item.timestamp
+                          ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                          : '';
+
+                        const catColor = {
+                          messages: '#ef4444',
+                          members: '#10b981',
+                          moderation: '#dc2626',
+                          channels: '#3b82f6',
+                          roles: '#8b5cf6',
+                          voice: '#06b6d4',
+                          server: '#f59e0b',
+                        }[item.category] || 'var(--primary)';
+
+                        return (
+                          <div
+                            key={item.id}
+                            className="editor-card"
+                            style={{
+                              padding: '1rem 1.25rem',
+                              borderLeft: `4px solid ${catColor}`,
+                              background: 'var(--bg-card)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.5rem',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                <span style={{
+                                  padding: '2px 8px',
+                                  borderRadius: '6px',
+                                  fontSize: '0.72rem',
+                                  fontWeight: 700,
+                                  textTransform: 'uppercase',
+                                  background: `${catColor}20`,
+                                  color: catColor,
+                                }}>
+                                  {item.category}
+                                </span>
+                                <h4 style={{ fontSize: '0.92rem', fontWeight: 600 }}>{item.title}</h4>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--text-sub)' }}>{timeStr}</span>
+                            </div>
+
+                            {/* Metadata Pills */}
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', fontSize: '0.78rem' }}>
+                              {item.executor && (
+                                <span style={{ background: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: '4px', color: 'var(--text-muted)' }}>
+                                  👤 <b>By:</b> {item.executor}
+                                </span>
+                              )}
+                              {item.user && (
+                                <span style={{ background: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: '4px', color: 'var(--text-muted)' }}>
+                                  🎯 <b>Target:</b> {item.user}
+                                </span>
+                              )}
+                              {item.channel && (
+                                <span style={{ background: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: '4px', color: 'var(--text-muted)' }}>
+                                  📁 <b>Channel:</b> {item.channel}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Details quote block */}
+                            {item.details && (
+                              <div style={{
+                                marginTop: '0.25rem',
+                                padding: '0.5rem 0.75rem',
+                                background: 'var(--bg-primary)',
+                                borderRadius: 'var(--radius-sm)',
+                                fontSize: '0.8rem',
+                                color: 'var(--text-muted)',
+                                borderLeft: '2px solid var(--border-color)',
+                                wordBreak: 'break-word',
+                              }}>
+                                {item.details}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              )}
             </>
           )}
 
