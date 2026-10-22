@@ -2,59 +2,66 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 
-// Locate the bot directory (where inboxConfig.json lives)
-const possibleBotDirs = [
-  path.resolve(process.cwd(), '..', 'bot'),
-  path.resolve('F:', 'FYPDISBOT', 'bot'),
-  process.cwd(),
-];
-
-function getBotDir() {
-  for (const d of possibleBotDirs) {
-    // prefer a dir that already has welcomeConfig.json (confirms it's the bot dir)
-    if (fs.existsSync(path.join(d, 'welcomeConfig.json'))) return d;
+// ─── FIND BOT DIRECTORY ───────────────────────────────────────────────────────
+// The bot directory is always alongside the web directory
+const BOT_DIR = (() => {
+  const candidates = [
+    path.resolve(process.cwd(), '..', 'bot'),   // running from web/
+    path.resolve('F:', 'FYPDISBOT', 'bot'),      // absolute fallback
+    path.resolve(process.cwd(), 'bot'),          // running from root
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'welcomeConfig.json')) ||
+        fs.existsSync(path.join(dir, 'index.js'))) {
+      return dir;
+    }
   }
-  return possibleBotDirs[0];
-}
+  return candidates[0];
+})();
 
-function getInboxConfigPath() {
-  return path.join(getBotDir(), 'inboxConfig.json');
-}
+const INBOX_CONFIG_PATH = path.join(BOT_DIR, 'inboxConfig.json');
 
-let memoryInboxConfig = { channelId: '' };
+console.log('[inbox API] BOT_DIR:', BOT_DIR);
+console.log('[inbox API] inboxConfig path:', INBOX_CONFIG_PATH);
 
-function loadInboxConfig() {
+// ─── READ / WRITE ─────────────────────────────────────────────────────────────
+function readInboxConfig() {
   try {
-    const p = getInboxConfigPath();
-    if (fs.existsSync(p)) {
-      memoryInboxConfig = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (fs.existsSync(INBOX_CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(INBOX_CONFIG_PATH, 'utf8'));
     }
   } catch {}
-  return memoryInboxConfig;
+  return { channelId: '' };
 }
 
-function saveInboxConfig(cfg) {
-  memoryInboxConfig = { ...memoryInboxConfig, ...cfg };
+function writeInboxConfig(data) {
   try {
-    const p = getInboxConfigPath();
-    const dir = path.dirname(p);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(p, JSON.stringify(memoryInboxConfig, null, 2), 'utf8');
-  } catch {}
-  return memoryInboxConfig;
+    if (!fs.existsSync(BOT_DIR)) fs.mkdirSync(BOT_DIR, { recursive: true });
+    fs.writeFileSync(INBOX_CONFIG_PATH, JSON.stringify(data, null, 2), 'utf8');
+    console.log('[inbox API] Saved:', data);
+    return true;
+  } catch (e) {
+    console.error('[inbox API] Write error:', e.message);
+    return false;
+  }
 }
 
+// ─── HANDLERS ─────────────────────────────────────────────────────────────────
 export async function GET() {
-  const config = loadInboxConfig();
-  return NextResponse.json(config);
+  return NextResponse.json(readInboxConfig());
 }
 
 export async function POST(request) {
   try {
     const body = await request.json();
-    const updated = saveInboxConfig(body);
-    return NextResponse.json({ success: true, config: updated });
-  } catch (err) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    const newConfig = { channelId: (body.channelId || '').trim() };
+    const ok = writeInboxConfig(newConfig);
+    if (ok) {
+      return NextResponse.json({ success: true, config: newConfig });
+    } else {
+      return NextResponse.json({ success: false, error: 'Failed to write config file' }, { status: 500 });
+    }
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e.message }, { status: 500 });
   }
 }

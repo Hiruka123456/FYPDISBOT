@@ -46,6 +46,9 @@ export default function DashboardPage() {
   const [isSavingInbox, setIsSavingInbox] = useState(false);
 
   const messageEndRef = useRef(null);
+  // configRef keeps a live reference to config to avoid stale closures in onBlur handlers
+  const configRef = useRef(config);
+  useEffect(() => { configRef.current = config; }, [config]);
 
   // Check if inbox config was modified
   const isInboxDirty = Boolean(
@@ -543,7 +546,7 @@ export default function DashboardPage() {
                       placeholder="e.g. 1562640532226842737 or #welcome"
                       value={config.channelId}
                       onChange={(e) => setConfig({ ...config, channelId: e.target.value })}
-                      onBlur={() => saveConfigDirectly(config, '✅ Channel setting saved to bot!')}
+                      onBlur={() => saveConfigDirectly(configRef.current, '✅ Channel setting saved to bot!')}
                     />
                   </div>
 
@@ -556,7 +559,7 @@ export default function DashboardPage() {
                       placeholder="Welcome to {server}!"
                       value={config.title}
                       onChange={(e) => setConfig({ ...config, title: e.target.value })}
-                      onBlur={() => saveConfigDirectly(config, '✅ Title saved to bot!')}
+                      onBlur={() => saveConfigDirectly(configRef.current, '✅ Title saved to bot!')}
                     />
                   </div>
 
@@ -570,7 +573,7 @@ export default function DashboardPage() {
                       className="form-textarea"
                       value={config.message}
                       onChange={(e) => setConfig({ ...config, message: e.target.value })}
-                      onBlur={() => saveConfigDirectly(config, '✅ Message text saved to bot!')}
+                      onBlur={() => saveConfigDirectly(configRef.current, '✅ Message text saved to bot!')}
                     />
                     <div className="tag-chips">
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-sub)', alignSelf: 'center' }}>Click to insert:</span>
@@ -598,7 +601,7 @@ export default function DashboardPage() {
                       placeholder="https://example.com/banner.jpg"
                       value={config.imageUrl}
                       onChange={(e) => setConfig({ ...config, imageUrl: e.target.value })}
-                      onBlur={() => saveConfigDirectly(config, '✅ Picture URL saved to bot!')}
+                      onBlur={() => saveConfigDirectly(configRef.current, '✅ Picture URL saved to bot!')}
                     />
                     <div className="preset-list">
                       {PRESET_BANNERS.map((preset) => (
@@ -627,7 +630,7 @@ export default function DashboardPage() {
                         className="color-input"
                         value={config.embedColor}
                         onChange={(e) => setConfig({ ...config, embedColor: e.target.value })}
-                        onBlur={() => saveConfigDirectly(config, '✅ Accent color saved to bot!')}
+                        onBlur={() => saveConfigDirectly(configRef.current, '✅ Accent color saved to bot!')}
                       />
                       <input
                         type="text"
@@ -635,7 +638,7 @@ export default function DashboardPage() {
                         style={{ width: '130px' }}
                         value={config.embedColor}
                         onChange={(e) => setConfig({ ...config, embedColor: e.target.value })}
-                        onBlur={() => saveConfigDirectly(config, '✅ Accent color saved to bot!')}
+                        onBlur={() => saveConfigDirectly(configRef.current, '✅ Accent color saved to bot!')}
                       />
                       <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Left-border accent in Discord</span>
                     </div>
