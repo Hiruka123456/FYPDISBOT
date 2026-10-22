@@ -24,11 +24,36 @@ const BOT_DIR = (() => {
 const CHAT_HISTORY_PATH = path.join(BOT_DIR, 'chatHistory.json');
 const INBOX_CONFIG_PATH = path.join(BOT_DIR, 'inboxConfig.json');
 
+function deduplicateMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  const clean = [];
+  for (const msg of messages) {
+    if (!msg || !msg.text) continue;
+    const isDup = clean.some(existing => {
+      if (existing.id && msg.id && existing.id === msg.id) return true;
+      if (existing.sender === msg.sender && existing.text?.trim() === msg.text?.trim()) {
+        const t1 = new Date(existing.timestamp).getTime();
+        const t2 = new Date(msg.timestamp).getTime();
+        if (isNaN(t1) || isNaN(t2) || Math.abs(t1 - t2) < 120000) return true;
+      }
+      return false;
+    });
+    if (!isDup) clean.push(msg);
+  }
+  return clean;
+}
+
 // ─── HISTORY HELPERS ──────────────────────────────────────────────────────────
 function readHistory() {
   try {
     if (fs.existsSync(CHAT_HISTORY_PATH)) {
-      return JSON.parse(fs.readFileSync(CHAT_HISTORY_PATH, 'utf8'));
+      const data = JSON.parse(fs.readFileSync(CHAT_HISTORY_PATH, 'utf8'));
+      if (data && Array.isArray(data.conversations)) {
+        for (const conv of data.conversations) {
+          conv.messages = deduplicateMessages(conv.messages);
+        }
+        return data;
+      }
     }
   } catch {}
   return { conversations: [] };
@@ -233,7 +258,15 @@ export async function GET() {
                   conv.lastMessage = parsed.text;
                   conv.lastUpdated = parsed.timestamp;
                 }
-                const exists = conv.messages.some(m => m.id === parsed.id || (m.timestamp === parsed.timestamp && m.text === parsed.text));
+                const exists = conv.messages.some(m => {
+                  if (m.id && parsed.id && m.id === parsed.id) return true;
+                  if (m.sender === parsed.sender && m.text?.trim() === parsed.text?.trim()) {
+                    const t1 = new Date(m.timestamp).getTime();
+                    const t2 = new Date(parsed.timestamp).getTime();
+                    if (isNaN(t1) || isNaN(t2) || Math.abs(t1 - t2) < 120000) return true;
+                  }
+                  return false;
+                });
                 if (!exists) {
                   conv.messages.push({
                     id: parsed.id,
@@ -244,6 +277,15 @@ export async function GET() {
                   });
                 }
               }
+            }
+          }
+          // Deduplicate and update last messages
+          for (const conv of history.conversations) {
+            conv.messages = deduplicateMessages(conv.messages);
+            if (conv.messages.length > 0) {
+              const last = conv.messages[conv.messages.length - 1];
+              conv.lastMessage = last.text;
+              conv.lastUpdated = last.timestamp;
             }
           }
           history.conversations.sort((a, b) => new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0));
