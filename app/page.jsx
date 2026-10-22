@@ -98,6 +98,29 @@ export default function DashboardPage() {
   const [modSearch, setModSearch] = useState('');
   const [modSubView, setModSubView] = useState('commands'); // 'commands' | 'warnings'
 
+  // Ticketing System State
+  const [tickets, setTickets] = useState([]);
+  const [ticketConfig, setTicketConfig] = useState({
+    enabled: true,
+    categoryId: '',
+    transcriptChannelId: '',
+    supportRoleId: '',
+    maxOpenPerUser: 1,
+    openMessage: 'Welcome to your support ticket! A staff member will be with you shortly.',
+    autoCloseHours: 0,
+  });
+  const [savedTicketConfig, setSavedTicketConfig] = useState(null);
+  const [activeTicketId, setActiveTicketId] = useState(null);
+  const [ticketReply, setTicketReply] = useState('');
+  const [isSendingTicketReply, setIsSendingTicketReply] = useState(false);
+  const [isSavingTicketConfig, setIsSavingTicketConfig] = useState(false);
+  const [ticketSubView, setTicketSubView] = useState('open'); // 'open' | 'closed' | 'settings'
+  const [ticketSearch, setTicketSearch] = useState('');
+  const [liveTicketMessages, setLiveTicketMessages] = useState([]);
+  const ticketMsgEndRef = useRef(null);
+
+
+
   const messageEndRef = useRef(null);
   // configRef keeps a live reference to config to avoid stale closures in onBlur handlers
   const configRef = useRef(config);
@@ -132,13 +155,14 @@ export default function DashboardPage() {
   useEffect(() => {
     async function loadInitial() {
       try {
-        const [statusRes, configRes, chatsRes, inboxRes, logsRes, modRes] = await Promise.all([
+        const [statusRes, configRes, chatsRes, inboxRes, logsRes, modRes, ticketsRes] = await Promise.all([
           fetch('/api/status'),
           fetch('/api/welcome'),
           fetch('/api/chats'),
           fetch('/api/inbox'),
           fetch('/api/logs'),
           fetch('/api/moderation'),
+          fetch('/api/tickets'),
         ]);
 
         if (statusRes.ok) setServerStatus('Dashboard Online');
@@ -225,6 +249,16 @@ export default function DashboardPage() {
           if (Array.isArray(modData?.roles)) setServerRoles(modData.roles);
           if (Array.isArray(modData?.warnings)) setWarningsList(modData.warnings);
         }
+
+        if (ticketsRes.ok) {
+          const td = await ticketsRes.json();
+          if (Array.isArray(td?.tickets)) setTickets(td.tickets);
+          if (td?.config) {
+            setTicketConfig(td.config);
+            setSavedTicketConfig(td.config);
+          }
+          if (Array.isArray(td?.roles) && td.roles.length > 0) setServerRoles(td.roles);
+        }
       } catch {
         setServerStatus('Offline / Local');
       }
@@ -232,31 +266,32 @@ export default function DashboardPage() {
     loadInitial();
   }, []);
 
-  // Poll chats, logs, and moderation periodically
+  // Poll chats, logs, moderation, and tickets periodically
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const [resChats, resLogs, resMod] = await Promise.all([
+        const [resChats, resLogs, resMod, resTix] = await Promise.all([
           fetch('/api/chats'),
           fetch('/api/logs'),
           fetch('/api/moderation'),
+          fetch('/api/tickets'),
         ]);
         if (resChats.ok) {
           const data = await resChats.json();
-          if (data?.conversations) {
-            setConversations(data.conversations);
-          }
+          if (data?.conversations) setConversations(data.conversations);
         }
         if (resLogs.ok) {
           const logsData = await resLogs.json();
-          if (Array.isArray(logsData?.recentLogs)) {
-            setRecentLogs(logsData.recentLogs);
-          }
+          if (Array.isArray(logsData?.recentLogs)) setRecentLogs(logsData.recentLogs);
         }
         if (resMod.ok) {
           const modData = await resMod.json();
           if (Array.isArray(modData?.warnings)) setWarningsList(modData.warnings);
           if (Array.isArray(modData?.roles)) setServerRoles(modData.roles);
+        }
+        if (resTix.ok) {
+          const td = await resTix.json();
+          if (Array.isArray(td?.tickets)) setTickets(td.tickets);
         }
       } catch {
         // Ignore poll error
@@ -269,6 +304,33 @@ export default function DashboardPage() {
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversations, activeUserId]);
+
+  // Auto-scroll ticket chat
+  useEffect(() => {
+    ticketMsgEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [liveTicketMessages, activeTicketId]);
+
+  // Fetch live messages when active ticket changes
+  useEffect(() => {
+    if (!activeTicketId) return;
+    const t = tickets.find(tk => tk.id === activeTicketId);
+    if (t) setLiveTicketMessages(t.messages || []);
+
+    // Poll live Discord messages every 3s while a ticket is selected
+    const poll = setInterval(async () => {
+      if (!activeTicketId) return;
+      const cur = tickets.find(tk => tk.id === activeTicketId);
+      if (!cur || !cur.channelId) return;
+      try {
+        const r = await fetch(`/api/tickets?action=messages&channelId=${cur.channelId}`);
+        if (r.ok) {
+          const d = await r.json();
+          if (Array.isArray(d.messages)) setLiveTicketMessages(d.messages);
+        }
+      } catch {}
+    }, 3000);
+    return () => clearInterval(poll);
+  }, [activeTicketId]);
 
   const showToast = (msg) => {
     setToastMessage(msg);
@@ -518,8 +580,95 @@ export default function DashboardPage() {
     } catch {}
   };
 
+  // ─── Ticket Handlers ──────────────────────────────────────────────────────
+  const handleSaveTicketConfig = async (overrideCfg) => {
+    const cfgToSave = overrideCfg || ticketConfig;
+    setIsSavingTicketConfig(true);
+    try {
+      try { localStorage.setItem('modportal_ticket_config', JSON.stringify(cfgToSave)); } catch {}
+      const res = await fetch('/api/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_config', config: cfgToSave }),
+      });
+      if (res.ok) {
+        setSavedTicketConfig(cfgToSave);
+        showToast('🎫 Ticket system settings saved!');
+      } else {
+        showToast('❌ Failed to save ticket config.');
+      }
+    } catch (err) {
+      showToast(`❌ Error: ${err.message}`);
+    } finally {
+      setIsSavingTicketConfig(false);
+    }
+  };
+
+  const handleSendTicketReply = async (e) => {
+    e.preventDefault();
+    if (!ticketReply.trim() || !activeTicketId || isSendingTicketReply) return;
+    setIsSendingTicketReply(true);
+    const text = ticketReply.trim();
+    setTicketReply('');
+    try {
+      const res = await fetch('/api/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'send_message', ticketId: activeTicketId, content: text, authorName: 'Staff' }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        if (data.message) setLiveTicketMessages(prev => [...prev, data.message]);
+        showToast(data.discordSent ? '✅ Message sent to ticket channel!' : '✅ Saved (Discord send failed)');
+      } else {
+        showToast(`❌ ${data.error || 'Failed to send message'}`);
+      }
+    } catch (err) {
+      showToast(`❌ Error: ${err.message}`);
+    } finally {
+      setIsSendingTicketReply(false);
+    }
+  };
+
+  const handleCloseTicket = async (ticketId, reason = 'Closed from dashboard') => {
+    try {
+      const res = await fetch('/api/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'close_ticket', ticketId, reason }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status: 'closed', closedAt: new Date().toISOString() } : t));
+        if (activeTicketId === ticketId) setActiveTicketId(null);
+        showToast('🔒 Ticket closed & transcript saved!');
+      } else {
+        showToast(`❌ ${data.error || 'Failed to close ticket'}`);
+      }
+    } catch (err) {
+      showToast(`❌ Error: ${err.message}`);
+    }
+  };
+
+  const handleDeleteTicket = async (ticketId) => {
+    if (!confirm('Delete this ticket record permanently?')) return;
+    try {
+      await fetch('/api/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_ticket', ticketId }),
+      });
+      setTickets(prev => prev.filter(t => t.id !== ticketId));
+      if (activeTicketId === ticketId) setActiveTicketId(null);
+      showToast('🗑️ Ticket deleted.');
+    } catch {}
+  };
+
+  const isTicketConfigDirty = Boolean(savedTicketConfig && JSON.stringify(ticketConfig) !== JSON.stringify(savedTicketConfig));
+
   // Send Reply to Active Customer
   const handleSendReply = async (e) => {
+
     e.preventDefault();
     if (!replyText.trim() || !activeUserId || isSendingReply) return;
 
@@ -717,6 +866,14 @@ export default function DashboardPage() {
             <span className="nav-icon">💬</span>
             <span>Customer Chats</span>
             <span className="pill">{conversations.length}</span>
+          </button>
+          <button
+            className={`nav-item ${activeTab === 'tickets' ? 'active' : ''}`}
+            onClick={() => setActiveTab('tickets')}
+          >
+            <span className="nav-icon">🎫</span>
+            <span>Tickets</span>
+            <span className="pill">{tickets.filter(t => t.status === 'open').length}</span>
           </button>
 
           <div className="nav-section-title">MANAGEMENT</div>
@@ -1153,8 +1310,509 @@ export default function DashboardPage() {
             </div>
           )}
 
+          {/* TAB: TICKETS */}
+          {activeTab === 'tickets' && (() => {
+            const openTickets   = tickets.filter(t => t.status === 'open');
+            const closedTickets = tickets.filter(t => t.status === 'closed');
+            const filteredOpen  = openTickets.filter(t =>
+              !ticketSearch || t.subject?.toLowerCase().includes(ticketSearch.toLowerCase()) ||
+              t.openedByName?.toLowerCase().includes(ticketSearch.toLowerCase()) ||
+              String(t.number).includes(ticketSearch)
+            );
+            const filteredClosed = closedTickets.filter(t =>
+              !ticketSearch || t.subject?.toLowerCase().includes(ticketSearch.toLowerCase()) ||
+              t.openedByName?.toLowerCase().includes(ticketSearch.toLowerCase()) ||
+              String(t.number).includes(ticketSearch)
+            );
+            const activeTicket = tickets.find(t => t.id === activeTicketId);
+
+            return (
+              <>
+                {/* Header Banner */}
+                <div className="welcome-banner">
+                  <div className="welcome-text">
+                    <h1>🎫 Support Tickets</h1>
+                    <p>View and respond to open tickets live, review closed tickets with transcripts, and configure the ticketing system.</p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      className={`btn ${ticketConfig.enabled ? 'btn-secondary' : 'btn-danger'}`}
+                      style={{
+                        background: ticketConfig.enabled ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                        borderColor: ticketConfig.enabled ? '#10b981' : '#ef4444',
+                        color: ticketConfig.enabled ? '#10b981' : '#ef4444',
+                        fontWeight: 600,
+                      }}
+                      onClick={() => {
+                        const updated = { ...ticketConfig, enabled: !ticketConfig.enabled };
+                        setTicketConfig(updated);
+                        handleSaveTicketConfig(updated);
+                      }}
+                    >
+                      {ticketConfig.enabled ? '🟢 Tickets: ACTIVE' : '🔴 Tickets: DISABLED'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sub-view Switcher */}
+                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                  {[
+                    { key: 'open',     label: `🟢 Open Tickets`,    count: openTickets.length },
+                    { key: 'closed',   label: `🔒 Closed Tickets`,  count: closedTickets.length },
+                    { key: 'settings', label: `⚙️ Settings`,         count: null },
+                  ].map(sv => (
+                    <button
+                      key={sv.key}
+                      className={`btn ${ticketSubView === sv.key ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                      onClick={() => { setTicketSubView(sv.key); setActiveTicketId(null); }}
+                    >
+                      {sv.label}
+                      {sv.count !== null && (
+                        <span style={{ padding: '1px 7px', borderRadius: '10px', fontSize: '0.75rem',
+                          background: ticketSubView === sv.key ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)' }}>
+                          {sv.count}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                {/* OPEN TICKETS VIEW */}
+                {ticketSubView === 'open' && (
+                  <div style={{ display: 'flex', gap: '1.25rem', height: '620px' }}>
+
+                    {/* Ticket List Panel */}
+                    <div style={{ width: '300px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <input
+                        type="text"
+                        className="form-input"
+                        style={{ fontSize: '0.85rem', padding: '8px 12px' }}
+                        placeholder="Search tickets..."
+                        value={ticketSearch}
+                        onChange={e => setTicketSearch(e.target.value)}
+                      />
+                      <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {filteredOpen.length === 0 ? (
+                          <div className="editor-card" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-sub)' }}>
+                            <span style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>🎫</span>
+                            <p style={{ fontSize: '0.85rem' }}>No open tickets</p>
+                          </div>
+                        ) : filteredOpen.map(ticket => (
+                          <div
+                            key={ticket.id}
+                            onClick={() => setActiveTicketId(ticket.id)}
+                            style={{
+                              padding: '0.85rem 1rem',
+                              borderRadius: 'var(--radius-md)',
+                              background: activeTicketId === ticket.id ? 'var(--primary)' : 'var(--bg-card)',
+                              border: `1px solid ${activeTicketId === ticket.id ? 'var(--primary)' : 'var(--border-color)'}`,
+                              cursor: 'pointer',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
+                              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: activeTicketId === ticket.id ? '#fff' : 'var(--text-main)' }}>
+                                #{ticket.number} — {ticket.openedByName}
+                              </span>
+                              <span style={{ fontSize: '0.72rem', opacity: 0.7,
+                                color: activeTicketId === ticket.id ? '#fff' : 'var(--text-muted)' }}>
+                                {ticket.createdAt ? new Date(ticket.createdAt).toLocaleDateString() : ''}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '0.8rem', opacity: 0.8, color: activeTicketId === ticket.id ? '#e0e7ff' : 'var(--text-sub)',
+                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {ticket.subject}
+                            </div>
+                            <div style={{ marginTop: '0.4rem', display: 'flex', gap: '0.4rem' }}>
+                              <span style={{ fontSize: '0.7rem', padding: '1px 7px', borderRadius: '20px',
+                                background: activeTicketId === ticket.id ? 'rgba(255,255,255,0.2)' : 'rgba(16,185,129,0.15)',
+                                color: activeTicketId === ticket.id ? '#fff' : '#10b981' }}>
+                                🟢 Open
+                              </span>
+                              <span style={{ fontSize: '0.7rem', padding: '1px 7px', borderRadius: '20px',
+                                background: activeTicketId === ticket.id ? 'rgba(255,255,255,0.1)' : 'var(--bg-secondary)',
+                                color: activeTicketId === ticket.id ? '#fff' : 'var(--text-muted)' }}>
+                                💬 {(ticket.messages || []).length}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Chat Panel */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRadius: 'var(--radius-lg)',
+                      background: 'var(--bg-card)', border: '1px solid var(--border-color)', overflow: 'hidden' }}>
+                      {activeTicket ? (
+                        <>
+                          {/* Ticket Header */}
+                          <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--border-color)',
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: '1rem' }}>
+                                🎫 #{activeTicket.number} — {activeTicket.subject}
+                              </div>
+                              <div style={{ fontSize: '0.78rem', color: 'var(--text-sub)', marginTop: '2px' }}>
+                                Opened by <b>{activeTicket.openedByName}</b> · {activeTicket.createdAt ? new Date(activeTicket.createdAt).toLocaleString() : ''}
+                                {activeTicket.claimedByName && <span> · ✋ Claimed by {activeTicket.claimedByName}</span>}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                              <button
+                                className="btn btn-secondary"
+                                style={{ fontSize: '0.8rem', color: '#ef4444', borderColor: '#ef4444' }}
+                                onClick={() => handleCloseTicket(activeTicket.id)}
+                              >
+                                🔒 Close Ticket
+                              </button>
+                              <button
+                                className="btn btn-secondary"
+                                style={{ fontSize: '0.8rem' }}
+                                onClick={() => handleDeleteTicket(activeTicket.id)}
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Message Feed */}
+                          <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                            {liveTicketMessages.length === 0 ? (
+                              <div style={{ textAlign: 'center', color: 'var(--text-sub)', marginTop: '3rem' }}>
+                                <span style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>💬</span>
+                                No messages yet in this ticket.
+                              </div>
+                            ) : liveTicketMessages.map((msg, i) => {
+                              const isStaff = msg.fromWeb || msg.isSystem;
+                              const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                              return (
+                                <div key={msg.id || i} style={{ display: 'flex', flexDirection: 'column',
+                                  alignItems: isStaff ? 'flex-end' : 'flex-start' }}>
+                                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '3px' }}>
+                                    {msg.author} · {time}
+                                  </span>
+                                  <div style={{
+                                    maxWidth: '75%', padding: '0.6rem 0.9rem', borderRadius: '12px',
+                                    background: isStaff ? 'var(--primary)' : 'var(--bg-secondary)',
+                                    color: isStaff ? '#fff' : 'var(--text-main)',
+                                    fontSize: '0.87rem', lineHeight: 1.5, wordBreak: 'break-word',
+                                    borderBottomRightRadius: isStaff ? '4px' : '12px',
+                                    borderBottomLeftRadius: isStaff ? '12px' : '4px',
+                                  }}>
+                                    {msg.content}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            <div ref={ticketMsgEndRef} />
+                          </div>
+
+                          {/* Reply Bar */}
+                          <form onSubmit={handleSendTicketReply} style={{ padding: '1rem', borderTop: '1px solid var(--border-color)',
+                            display: 'flex', gap: '0.75rem' }}>
+                            <input
+                              type="text"
+                              className="form-input"
+                              style={{ flex: 1, fontSize: '0.9rem' }}
+                              placeholder={`Reply in ticket #${activeTicket.number} (sends to Discord channel too)...`}
+                              value={ticketReply}
+                              onChange={e => setTicketReply(e.target.value)}
+                              disabled={isSendingTicketReply}
+                            />
+                            <button
+                              type="submit"
+                              className="btn btn-primary"
+                              disabled={!ticketReply.trim() || isSendingTicketReply}
+                            >
+                              {isSendingTicketReply ? 'Sending...' : 'Send'}
+                            </button>
+                          </form>
+                        </>
+                      ) : (
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+                          justifyContent: 'center', color: 'var(--text-sub)', gap: '1rem' }}>
+                          <span style={{ fontSize: '3rem' }}>🎫</span>
+                          <div style={{ textAlign: 'center' }}>
+                            <h3 style={{ color: 'var(--text-main)', marginBottom: '0.5rem' }}>Select a Ticket</h3>
+                            <p style={{ fontSize: '0.88rem' }}>Click a ticket from the list to view the conversation and reply.</p>
+                          </div>
+                          <div style={{ padding: '0.75rem 1.25rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)',
+                            fontSize: '0.82rem', textAlign: 'center', maxWidth: '360px', lineHeight: 1.6, color: 'var(--text-muted)' }}>
+                            💡 Use <b>/ticket open</b> in Discord or post a <b>/ticketpanel</b> button to let users create tickets.
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* CLOSED TICKETS VIEW */}
+                {ticketSubView === 'closed' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <input
+                      type="text"
+                      className="form-input"
+                      style={{ fontSize: '0.85rem', maxWidth: '400px' }}
+                      placeholder="Search closed tickets..."
+                      value={ticketSearch}
+                      onChange={e => setTicketSearch(e.target.value)}
+                    />
+                    {filteredClosed.length === 0 ? (
+                      <div className="editor-card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-sub)' }}>
+                        <span style={{ fontSize: '2.5rem', display: 'block', marginBottom: '0.75rem' }}>🔒</span>
+                        <h4 style={{ color: 'var(--text-main)', marginBottom: '0.35rem' }}>No Closed Tickets</h4>
+                        <p style={{ fontSize: '0.85rem' }}>Closed tickets with transcripts will appear here.</p>
+                      </div>
+                    ) : filteredClosed.map(ticket => (
+                      <div key={ticket.id} className="editor-card" style={{ borderLeft: '4px solid #64748b' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem' }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
+                              <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>#{ticket.number} — {ticket.subject}</span>
+                              <span style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '20px',
+                                background: 'rgba(100,116,139,0.15)', color: '#64748b', fontWeight: 600 }}>
+                                🔒 Closed
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-sub)', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                              <span>👤 {ticket.openedByName}</span>
+                              <span>📅 {ticket.createdAt ? new Date(ticket.createdAt).toLocaleDateString() : 'N/A'}</span>
+                              {ticket.closedAt && <span>🔒 {new Date(ticket.closedAt).toLocaleDateString()}</span>}
+                              {ticket.closedByName && <span>By: {ticket.closedByName}</span>}
+                              <span>💬 {(ticket.messages || []).length} messages</span>
+                            </div>
+                            {ticket.closeReason && (
+                              <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                Reason: "{ticket.closeReason}"
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: '0.8rem' }}
+                              onClick={() => {
+                                setActiveTicketId(ticket.id);
+                                setLiveTicketMessages(ticket.messages || []);
+                                setTicketSubView('transcript');
+                              }}
+                            >
+                              📋 View Transcript
+                            </button>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: '0.8rem', color: '#ef4444' }}
+                              onClick={() => handleDeleteTicket(ticket.id)}
+                            >
+                              🗑️ Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* TRANSCRIPT VIEW */}
+                {ticketSubView === 'transcript' && activeTicket && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                      <button className="btn btn-secondary" style={{ fontSize: '0.82rem' }}
+                        onClick={() => { setTicketSubView('closed'); setActiveTicketId(null); }}>
+                        ← Back to Closed Tickets
+                      </button>
+                    </div>
+                    <div className="editor-card">
+                      <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem', marginBottom: '1rem' }}>
+                        <h3 style={{ marginBottom: '0.5rem' }}>📋 Transcript — Ticket #{activeTicket.number}</h3>
+                        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.82rem', color: 'var(--text-sub)' }}>
+                          <span>👤 {activeTicket.openedByName}</span>
+                          <span>📋 {activeTicket.subject}</span>
+                          <span>💬 {(activeTicket.messages || []).length} messages</span>
+                          {activeTicket.closedAt && <span>🔒 Closed {new Date(activeTicket.closedAt).toLocaleString()}</span>}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '560px', overflowY: 'auto' }}>
+                        {(activeTicket.messages || []).length === 0 ? (
+                          <p style={{ color: 'var(--text-sub)', textAlign: 'center', padding: '2rem' }}>No messages in transcript.</p>
+                        ) : (activeTicket.messages || []).map((msg, i) => {
+                          const isStaff = msg.fromWeb || msg.isSystem;
+                          const time = msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '';
+                          return (
+                            <div key={msg.id || i} style={{ display: 'flex', flexDirection: 'column',
+                              alignItems: isStaff ? 'flex-end' : 'flex-start' }}>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '3px' }}>
+                                {msg.author} · {time}
+                              </span>
+                              <div style={{
+                                maxWidth: '80%', padding: '0.6rem 0.9rem', borderRadius: '12px',
+                                background: isStaff ? 'rgba(99,102,241,0.15)' : 'var(--bg-secondary)',
+                                color: 'var(--text-main)', fontSize: '0.87rem', lineHeight: 1.5, wordBreak: 'break-word',
+                                border: `1px solid ${isStaff ? 'rgba(99,102,241,0.3)' : 'var(--border-color)'}`,
+                              }}>
+                                {msg.content}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* SETTINGS VIEW */}
+                {ticketSubView === 'settings' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxWidth: '760px' }}>
+
+                    {/* Channels */}
+                    <div className="editor-card" style={{ border: '1px solid var(--border-glow)' }}>
+                      <div className="editor-card-header" style={{ marginBottom: '1.25rem' }}>
+                        <div className="editor-title">
+                          <h3>📁 Ticket Channels</h3>
+                          <p>Configure where tickets are created and where transcripts are saved.</p>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        <div className="form-group" style={{ maxWidth: '500px' }}>
+                          <label className="form-label">
+                            <span>Ticket Category ID</span>
+                            <span className="form-label-desc">Discord category under which ticket channels are created</span>
+                          </label>
+                          <input type="text" className="form-input"
+                            placeholder="e.g. 1562640000000000000 (right-click category → Copy ID)"
+                            value={ticketConfig.categoryId || ''}
+                            onChange={e => setTicketConfig({ ...ticketConfig, categoryId: e.target.value })}
+                            onBlur={() => handleSaveTicketConfig()}
+                          />
+                        </div>
+                        <div className="form-group" style={{ maxWidth: '500px' }}>
+                          <label className="form-label">
+                            <span>Transcript Channel ID</span>
+                            <span className="form-label-desc">Closed ticket transcripts (HTML file) are posted here</span>
+                          </label>
+                          <input type="text" className="form-input"
+                            placeholder="e.g. 1562687171079708784"
+                            value={ticketConfig.transcriptChannelId || ''}
+                            onChange={e => setTicketConfig({ ...ticketConfig, transcriptChannelId: e.target.value })}
+                            onBlur={() => handleSaveTicketConfig()}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Roles & Limits */}
+                    <div className="editor-card">
+                      <div className="editor-card-header" style={{ marginBottom: '1.25rem' }}>
+                        <div className="editor-title">
+                          <h3>🛡️ Roles &amp; Permissions</h3>
+                          <p>Set which role can view and manage all tickets, and how many tickets a user can open.</p>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        <div className="form-group" style={{ maxWidth: '500px' }}>
+                          <label className="form-label">
+                            <span>Support Role ID</span>
+                            <span className="form-label-desc">This role gets access to all ticket channels automatically</span>
+                          </label>
+                          <input type="text" className="form-input"
+                            placeholder="e.g. 1562687268739747850"
+                            value={ticketConfig.supportRoleId || ''}
+                            onChange={e => setTicketConfig({ ...ticketConfig, supportRoleId: e.target.value })}
+                            onBlur={() => handleSaveTicketConfig()}
+                          />
+                          {serverRoles.length > 0 && (
+                            <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                              {serverRoles.map(role => (
+                                <button key={role.id} type="button"
+                                  onClick={() => { const u = { ...ticketConfig, supportRoleId: role.id }; setTicketConfig(u); handleSaveTicketConfig(u); }}
+                                  style={{
+                                    padding: '3px 10px', borderRadius: '20px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
+                                    border: `2px solid ${ticketConfig.supportRoleId === role.id ? (role.color || '#6366f1') : 'var(--border-color)'}`,
+                                    background: ticketConfig.supportRoleId === role.id ? `${role.color || '#6366f1'}22` : 'var(--bg-secondary)',
+                                    color: ticketConfig.supportRoleId === role.id ? (role.color || '#6366f1') : 'var(--text-muted)',
+                                    transition: 'all 0.15s',
+                                  }}>
+                                  {ticketConfig.supportRoleId === role.id ? '✓ ' : ''}{role.name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="form-group" style={{ maxWidth: '220px' }}>
+                          <label className="form-label">
+                            <span>Max Open Tickets per User</span>
+                            <span className="form-label-desc">0 = unlimited</span>
+                          </label>
+                          <input type="number" className="form-input" min="0" max="10"
+                            value={ticketConfig.maxOpenPerUser ?? 1}
+                            onChange={e => setTicketConfig({ ...ticketConfig, maxOpenPerUser: parseInt(e.target.value) || 0 })}
+                            onBlur={() => handleSaveTicketConfig()}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Opening Message */}
+                    <div className="editor-card">
+                      <div className="editor-card-header" style={{ marginBottom: '1rem' }}>
+                        <div className="editor-title">
+                          <h3>💬 Opening Message</h3>
+                          <p>First message the bot posts inside a newly created ticket channel.</p>
+                        </div>
+                      </div>
+                      <div className="form-group">
+                        <textarea
+                          className="form-textarea"
+                          style={{ minHeight: '80px' }}
+                          value={ticketConfig.openMessage || ''}
+                          onChange={e => setTicketConfig({ ...ticketConfig, openMessage: e.target.value })}
+                          onBlur={() => handleSaveTicketConfig()}
+                          placeholder="Welcome to your support ticket! A staff member will be with you shortly."
+                        />
+                      </div>
+                    </div>
+
+                    <button className="btn btn-primary"
+                      onClick={() => handleSaveTicketConfig()}
+                      disabled={isSavingTicketConfig}
+                      style={{ alignSelf: 'flex-start', minWidth: '160px' }}>
+                      {isSavingTicketConfig ? '⏳ Saving...' : '💾 Save All Settings'}
+                    </button>
+
+                    {/* Discord Commands Reference */}
+                    <div className="editor-card" style={{ background: 'var(--bg-secondary)' }}>
+                      <div className="editor-title" style={{ marginBottom: '1rem' }}>
+                        <h3>📖 Discord Commands</h3>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', fontSize: '0.85rem' }}>
+                        {[
+                          { cmd: '/ticket open [subject]', desc: 'Opens a new ticket for the user' },
+                          { cmd: '/ticket close [reason]', desc: 'Closes current ticket & saves transcript' },
+                          { cmd: '/ticket add @user', desc: 'Adds a user to the current ticket' },
+                          { cmd: '/ticket remove @user', desc: 'Removes a user from the ticket' },
+                          { cmd: '/ticketpanel [channel]', desc: 'Posts a button panel for users to open tickets' },
+                          { cmd: '/settickets category: transcripts: supportrole:', desc: 'Configure ticket system via Discord' },
+                        ].map(item => (
+                          <div key={item.cmd} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+                            <code style={{ background: 'var(--bg-primary)', padding: '2px 8px', borderRadius: '4px',
+                              fontSize: '0.8rem', whiteSpace: 'nowrap', flexShrink: 0, color: 'var(--primary)' }}>
+                              {item.cmd}
+                            </code>
+                            <span style={{ color: 'var(--text-sub)', lineHeight: 1.5 }}>{item.desc}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
           {/* TAB: BOT SETTINGS (Inbox Channel) */}
           {activeTab === 'settings' && (
+
             <>
               <div className="welcome-banner">
                 <div className="welcome-text">
