@@ -111,6 +111,31 @@ async function fetchDiscordUser(token, userId) {
   return null;
 }
 
+function getDiscordToken() {
+  if (process.env.DISCORD_TOKEN && process.env.DISCORD_TOKEN.trim()) {
+    return process.env.DISCORD_TOKEN.trim();
+  }
+  const envPaths = [
+    path.join(process.cwd(), '.env.local'),
+    path.join(process.cwd(), '.env'),
+    path.join(BOT_DIR, '.env'),
+    path.join(process.cwd(), '..', 'bot', '.env'),
+  ];
+  for (const p of envPaths) {
+    try {
+      if (fs.existsSync(p)) {
+        const content = fs.readFileSync(p, 'utf8');
+        const match = content.match(/^DISCORD_TOKEN\s*=\s*(.+)$/m);
+        if (match && match[1]) {
+          const val = match[1].trim().replace(/^['"]|['"]$/g, '');
+          if (val) return val;
+        }
+      }
+    } catch {}
+  }
+  return '';
+}
+
 // ─── GET: Return all conversations ────────────────────────────────────────────
 export async function GET() {
   return NextResponse.json(readHistory());
@@ -120,7 +145,7 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const token = process.env.DISCORD_TOKEN;
+    const token = getDiscordToken();
     const now = new Date().toISOString();
 
     // ── ACTION: REPLY to existing customer ─────────────────────────────────────
