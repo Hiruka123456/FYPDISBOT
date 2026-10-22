@@ -194,12 +194,12 @@ export async function GET(request) {
 
   let updated = false;
   for (const ch of activeDiscordTicketChannels) {
-    const exists = data.tickets.some(t => t.channelId === ch.id);
-    if (!exists) {
+    const existing = data.tickets.find(t => t.channelId === ch.id);
+    if (!existing) {
       const numMatch = ch.name.match(/ticket-(\d+)/);
       const num = numMatch ? parseInt(numMatch[1]) : data.tickets.length + 1;
       data.tickets.push({
-        id: `ticket-${num}-${Date.now()}`,
+        id: `ticket-${ch.id}`,
         number: num,
         channelId: ch.id,
         channelName: ch.name,
@@ -214,6 +214,9 @@ export async function GET(request) {
         messages: [],
         guildId: GUILD_ID_DEFAULT,
       });
+      updated = true;
+    } else if (existing.status !== 'open') {
+      existing.status = 'open';
       updated = true;
     }
   }

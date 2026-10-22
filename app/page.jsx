@@ -120,8 +120,11 @@ export default function DashboardPage() {
   const [ticketSearch, setTicketSearch] = useState('');
   const [liveTicketMessages, setLiveTicketMessages] = useState([]);
   const ticketMsgEndRef = useRef(null);
-
-
+  // Overview Tab State
+  const [overviewData, setOverviewData] = useState(null);
+  const [isLoadingOverview, setIsLoadingOverview] = useState(false);
+  const [overviewMemberFilter, setOverviewMemberFilter] = useState('all'); // 'all' | 'humans' | 'bots'
+  const [overviewMemberSearch, setOverviewMemberSearch] = useState('');
 
   const messageEndRef = useRef(null);
   // configRef keeps a live reference to config to avoid stale closures in onBlur handlers
@@ -157,7 +160,7 @@ export default function DashboardPage() {
   useEffect(() => {
     async function loadInitial() {
       try {
-        const [statusRes, configRes, chatsRes, inboxRes, logsRes, modRes, ticketsRes] = await Promise.all([
+        const [statusRes, configRes, chatsRes, inboxRes, logsRes, modRes, ticketsRes, overviewRes] = await Promise.all([
           fetch('/api/status'),
           fetch('/api/welcome'),
           fetch('/api/chats'),
@@ -165,6 +168,7 @@ export default function DashboardPage() {
           fetch('/api/logs'),
           fetch('/api/moderation'),
           fetch('/api/tickets'),
+          fetch('/api/overview'),
         ]);
 
         if (statusRes.ok) setServerStatus('Dashboard Online');
@@ -275,6 +279,11 @@ export default function DashboardPage() {
           setTicketConfig(mergedTicketCfg);
           setSavedTicketConfig(mergedTicketCfg);
         }
+
+        if (overviewRes && overviewRes.ok) {
+          const ov = await overviewRes.json();
+          if (ov?.success) setOverviewData(ov);
+        }
       } catch {
         setServerStatus('Offline / Local');
       }
@@ -282,15 +291,16 @@ export default function DashboardPage() {
     loadInitial();
   }, []);
 
-  // Poll chats, logs, moderation, and tickets periodically
+  // Poll chats, logs, moderation, tickets, and overview periodically
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const [resChats, resLogs, resMod, resTix] = await Promise.all([
+        const [resChats, resLogs, resMod, resTix, resOv] = await Promise.all([
           fetch('/api/chats'),
           fetch('/api/logs'),
           fetch('/api/moderation'),
           fetch('/api/tickets'),
+          fetch('/api/overview'),
         ]);
         if (resChats.ok) {
           const data = await resChats.json();
@@ -309,12 +319,32 @@ export default function DashboardPage() {
           const td = await resTix.json();
           if (Array.isArray(td?.tickets)) setTickets(td.tickets);
         }
+        if (resOv && resOv.ok) {
+          const ov = await resOv.json();
+          if (ov?.success) setOverviewData(ov);
+        }
       } catch {
         // Ignore poll error
       }
     }, 4000);
     return () => clearInterval(interval);
   }, []);
+
+  const fetchOverview = async () => {
+    setIsLoadingOverview(true);
+    try {
+      const res = await fetch('/api/overview');
+      if (res.ok) {
+        const d = await res.json();
+        if (d?.success) {
+          setOverviewData(d);
+          showToast('📊 Server overview metrics updated!');
+        }
+      }
+    } catch {} finally {
+      setIsLoadingOverview(false);
+    }
+  };
 
   // Auto-scroll chat feed
   useEffect(() => {
@@ -329,16 +359,16 @@ export default function DashboardPage() {
   // Fetch live messages when active ticket changes
   useEffect(() => {
     if (!activeTicketId) return;
-    const t = tickets.find(tk => tk.id === activeTicketId);
+    const t = tickets.find(tk => tk.id === activeTicketId || (tk.channelId && tk.channelId === activeTicketId));
     if (t) setLiveTicketMessages(t.messages || []);
+
+    const targetChId = t?.channelId;
+    if (!targetChId) return;
 
     // Poll live Discord messages every 3s while a ticket is selected
     const poll = setInterval(async () => {
-      if (!activeTicketId) return;
-      const cur = tickets.find(tk => tk.id === activeTicketId);
-      if (!cur || !cur.channelId) return;
       try {
-        const r = await fetch(`/api/tickets?action=messages&channelId=${cur.channelId}`);
+        const r = await fetch(`/api/tickets?action=messages&channelId=${targetChId}`);
         if (r.ok) {
           const d = await r.json();
           if (Array.isArray(d.messages)) setLiveTicketMessages(d.messages);
@@ -1340,7 +1370,7 @@ export default function DashboardPage() {
               t.openedByName?.toLowerCase().includes(ticketSearch.toLowerCase()) ||
               String(t.number).includes(ticketSearch)
             );
-            const activeTicket = tickets.find(t => t.id === activeTicketId);
+            const activeTicket = tickets.find(t => t.id === activeTicketId || (t.channelId && t.channelId === activeTicketId)) || (activeTicketId ? null : openTickets[0]);
 
             return (
               <>
@@ -1429,46 +1459,49 @@ export default function DashboardPage() {
                               </button>
                             )}
                           </div>
-                        ) : filteredOpen.map(ticket => (
+                        ) : filteredOpen.map(ticket => {
+                          const isSelected = activeTicket?.id === ticket.id || (ticket.channelId && activeTicket?.channelId === ticket.channelId);
+                          return (
                           <div
                             key={ticket.id}
-                            onClick={() => setActiveTicketId(ticket.id)}
+                            onClick={() => setActiveTicketId(ticket.channelId || ticket.id)}
                             style={{
                               padding: '0.85rem 1rem',
                               borderRadius: 'var(--radius-md)',
-                              background: activeTicketId === ticket.id ? 'var(--primary)' : 'var(--bg-card)',
-                              border: `1px solid ${activeTicketId === ticket.id ? 'var(--primary)' : 'var(--border-color)'}`,
+                              background: isSelected ? 'var(--primary)' : 'var(--bg-card)',
+                              border: `1px solid ${isSelected ? 'var(--primary)' : 'var(--border-color)'}`,
                               cursor: 'pointer',
                               transition: 'all 0.15s',
                             }}
                           >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
-                              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: activeTicketId === ticket.id ? '#fff' : 'var(--text-main)' }}>
+                              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: isSelected ? '#fff' : 'var(--text-main)' }}>
                                 #{ticket.number} — {ticket.openedByName}
                               </span>
                               <span style={{ fontSize: '0.72rem', opacity: 0.7,
-                                color: activeTicketId === ticket.id ? '#fff' : 'var(--text-muted)' }}>
+                                color: isSelected ? '#fff' : 'var(--text-muted)' }}>
                                 {ticket.createdAt ? new Date(ticket.createdAt).toLocaleDateString() : ''}
                               </span>
                             </div>
-                            <div style={{ fontSize: '0.8rem', opacity: 0.8, color: activeTicketId === ticket.id ? '#e0e7ff' : 'var(--text-sub)',
+                            <div style={{ fontSize: '0.8rem', opacity: 0.8, color: isSelected ? '#e0e7ff' : 'var(--text-sub)',
                               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {ticket.subject}
                             </div>
                             <div style={{ marginTop: '0.4rem', display: 'flex', gap: '0.4rem' }}>
                               <span style={{ fontSize: '0.7rem', padding: '1px 7px', borderRadius: '20px',
-                                background: activeTicketId === ticket.id ? 'rgba(255,255,255,0.2)' : 'rgba(16,185,129,0.15)',
-                                color: activeTicketId === ticket.id ? '#fff' : '#10b981' }}>
+                                background: isSelected ? 'rgba(255,255,255,0.2)' : 'rgba(16,185,129,0.15)',
+                                color: isSelected ? '#fff' : '#10b981' }}>
                                 🟢 Open
                               </span>
                               <span style={{ fontSize: '0.7rem', padding: '1px 7px', borderRadius: '20px',
-                                background: activeTicketId === ticket.id ? 'rgba(255,255,255,0.1)' : 'var(--bg-secondary)',
-                                color: activeTicketId === ticket.id ? '#fff' : 'var(--text-muted)' }}>
+                                background: isSelected ? 'rgba(255,255,255,0.1)' : 'var(--bg-secondary)',
+                                color: isSelected ? '#fff' : 'var(--text-muted)' }}>
                                 💬 {(ticket.messages || []).length}
                               </span>
                             </div>
                           </div>
-                        ))}
+                        );
+                      })}
                       </div>
                     </div>
 
@@ -2003,6 +2036,492 @@ export default function DashboardPage() {
               </div>
             </>
           )}
+
+          {/* TAB: OVERVIEW */}
+          {activeTab === 'overview' && (() => {
+            const counts = overviewData?.counts || {
+              totalMembers: 0,
+              onlineMembers: 0,
+              offlineMembers: 0,
+              humansCount: 0,
+              botsCount: 0,
+              totalChannels: 0,
+              textChannelsCount: 0,
+              voiceChannelsCount: 0,
+              categoriesCount: 0,
+              rolesCount: 0,
+              bansCount: 0,
+              totalTickets: tickets.length,
+              openTickets: tickets.filter(t => t.status === 'open').length,
+              totalWarnings: warningsList.length,
+            };
+
+            const server = overviewData?.server || {
+              name: 'Discord Community',
+              id: '1562039371090362398',
+            };
+
+            const allMembers = overviewData?.members || [];
+            const filteredMembers = allMembers
+              .filter(m => {
+                if (overviewMemberFilter === 'humans') return !m.isBot;
+                if (overviewMemberFilter === 'bots') return m.isBot;
+                return true;
+              })
+              .filter(m => {
+                if (!overviewMemberSearch.trim()) return true;
+                const q = overviewMemberSearch.toLowerCase();
+                return (
+                  m.username?.toLowerCase().includes(q) ||
+                  m.globalName?.toLowerCase().includes(q) ||
+                  m.id?.includes(q)
+                );
+              });
+
+            const rolesList = overviewData?.roles || serverRoles || [];
+
+            return (
+              <>
+                {/* Server Hero Banner */}
+                <div className="welcome-banner" style={{
+                  background: 'linear-gradient(135deg, rgba(99,102,241,0.18) 0%, rgba(139,92,246,0.12) 50%, rgba(16,185,129,0.08) 100%)',
+                  border: '1px solid var(--border-glow)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexWrap: 'wrap' }}>
+                    {server.icon ? (
+                      <img
+                        src={server.icon}
+                        alt={server.name}
+                        style={{ width: '64px', height: '64px', borderRadius: '50%', border: '3px solid var(--primary)', boxShadow: '0 0 20px rgba(99,102,241,0.4)' }}
+                      />
+                    ) : (
+                      <div style={{
+                        width: '64px', height: '64px', borderRadius: '50%',
+                        background: 'linear-gradient(135deg, var(--primary), #8b5cf6)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '1.8rem', fontWeight: 800, color: '#fff',
+                        boxShadow: '0 0 20px rgba(99,102,241,0.4)',
+                      }}>
+                        {server.name?.charAt(0) || 'D'}
+                      </div>
+                    )}
+                    <div className="welcome-text">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <h1 style={{ margin: 0, fontSize: '1.6rem' }}>{server.name}</h1>
+                        <span style={{
+                          padding: '2px 8px', borderRadius: '12px', fontSize: '0.72rem', fontWeight: 700,
+                          background: 'rgba(16,185,129,0.2)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
+                        }}>
+                          🟢 Bot Online
+                        </span>
+                        {server.boostTier > 0 && (
+                          <span style={{
+                            padding: '2px 8px', borderRadius: '12px', fontSize: '0.72rem', fontWeight: 700,
+                            background: 'rgba(244,63,94,0.2)', color: '#f43f5e', border: '1px solid rgba(244,63,94,0.3)',
+                          }}>
+                            🚀 Tier {server.boostTier}
+                          </span>
+                        )}
+                      </div>
+                      <p style={{ marginTop: '0.35rem', color: 'var(--text-sub)', fontSize: '0.85rem' }}>
+                        Server ID: <code style={{ color: 'var(--primary)', background: 'var(--bg-secondary)', padding: '1px 6px', borderRadius: '4px' }}>{server.id}</code>
+                        {' · '}
+                        <b>{counts.totalMembers}</b> Total Members
+                        {' · '}
+                        <b>{counts.onlineMembers}</b> Online Now
+                      </p>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={fetchOverview}
+                      disabled={isLoadingOverview}
+                      style={{ fontSize: '0.82rem', padding: '6px 14px', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                    >
+                      <span style={{ display: 'inline-block', transform: isLoadingOverview ? 'rotate(360deg)' : 'none', transition: 'transform 0.8s' }}>🔄</span>
+                      <span>{isLoadingOverview ? 'Refreshing...' : 'Refresh Stats'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 6 Key Metrics Cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+
+                  {/* Card 1: Total Members */}
+                  <div className="editor-card" style={{
+                    padding: '1.25rem',
+                    background: 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, var(--bg-card) 100%)',
+                    borderLeft: '4px solid #6366f1',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-sub)', textTransform: 'uppercase' }}>Total Members</span>
+                      <span style={{ fontSize: '1.5rem' }}>👥</span>
+                    </div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#fff', marginBottom: '0.35rem' }}>
+                      {counts.totalMembers}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', gap: '0.5rem' }}>
+                      <span>👤 {counts.humansCount} Humans</span>
+                      <span>·</span>
+                      <span>🤖 {counts.botsCount} Bots</span>
+                    </div>
+                  </div>
+
+                  {/* Card 2: Online Presence */}
+                  <div className="editor-card" style={{
+                    padding: '1.25rem',
+                    background: 'linear-gradient(135deg, rgba(16,185,129,0.08) 0%, var(--bg-card) 100%)',
+                    borderLeft: '4px solid #10b981',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-sub)', textTransform: 'uppercase' }}>Online Now</span>
+                      <span style={{ fontSize: '1.5rem' }}>🟢</span>
+                    </div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#10b981', marginBottom: '0.35rem' }}>
+                      {counts.onlineMembers}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      💤 {counts.offlineMembers} Offline / Idle
+                    </div>
+                  </div>
+
+                  {/* Card 3: Channels Overview */}
+                  <div className="editor-card" style={{
+                    padding: '1.25rem',
+                    background: 'linear-gradient(135deg, rgba(59,130,246,0.08) 0%, var(--bg-card) 100%)',
+                    borderLeft: '4px solid #3b82f6',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-sub)', textTransform: 'uppercase' }}>Total Channels</span>
+                      <span style={{ fontSize: '1.5rem' }}>💬</span>
+                    </div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#60a5fa', marginBottom: '0.35rem' }}>
+                      {counts.totalChannels}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      💬 {counts.textChannelsCount} Text · 🔊 {counts.voiceChannelsCount} Voice · 📁 {counts.categoriesCount} Categories
+                    </div>
+                  </div>
+
+                  {/* Card 4: Server Roles */}
+                  <div className="editor-card" style={{
+                    padding: '1.25rem',
+                    background: 'linear-gradient(135deg, rgba(139,92,246,0.08) 0%, var(--bg-card) 100%)',
+                    borderLeft: '4px solid #8b5cf6',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-sub)', textTransform: 'uppercase' }}>Server Roles</span>
+                      <span style={{ fontSize: '1.5rem' }}>🏷️</span>
+                    </div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#a78bfa', marginBottom: '0.35rem' }}>
+                      {counts.rolesCount}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      Admin &amp; Moderation hierarchy configured
+                    </div>
+                  </div>
+
+                  {/* Card 5: Tickets Summary */}
+                  <div className="editor-card" style={{
+                    padding: '1.25rem',
+                    background: 'linear-gradient(135deg, rgba(245,158,11,0.08) 0%, var(--bg-card) 100%)',
+                    borderLeft: '4px solid #f59e0b',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-sub)', textTransform: 'uppercase' }}>Support Tickets</span>
+                      <span style={{ fontSize: '1.5rem' }}>🎫</span>
+                    </div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#fbbf24', marginBottom: '0.35rem' }}>
+                      {counts.totalTickets}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      🟢 {counts.openTickets} Open · 🔒 {Math.max(0, counts.totalTickets - counts.openTickets)} Closed with Transcripts
+                    </div>
+                  </div>
+
+                  {/* Card 6: Moderation & Audit */}
+                  <div className="editor-card" style={{
+                    padding: '1.25rem',
+                    background: 'linear-gradient(135deg, rgba(239,68,68,0.08) 0%, var(--bg-card) 100%)',
+                    borderLeft: '4px solid #ef4444',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-sub)', textTransform: 'uppercase' }}>Moderation &amp; Bans</span>
+                      <span style={{ fontSize: '1.5rem' }}>🛡️</span>
+                    </div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#f87171', marginBottom: '0.35rem' }}>
+                      {counts.bansCount}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      🔨 {counts.bansCount} Bans · ⚠️ {counts.totalWarnings} Warnings issued
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* Two-Column Layout: Member Roster (Left) + Structure & Roles (Right) */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.8fr) minmax(0, 1.2fr)', gap: '1.5rem', alignItems: 'start' }}>
+
+                  {/* LEFT: Member Roster */}
+                  <div className="editor-card" style={{ padding: '1.25rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <div>
+                        <h3 style={{ fontSize: '1.05rem', margin: 0 }}>👥 Server Members ({counts.totalMembers})</h3>
+                        <p style={{ fontSize: '0.78rem', color: 'var(--text-sub)', marginTop: '2px' }}>Real-time member directory with role assignments</p>
+                      </div>
+
+                      {/* Filters */}
+                      <div style={{ display: 'flex', gap: '0.35rem' }}>
+                        {[
+                          { key: 'all', label: `All (${allMembers.length})` },
+                          { key: 'humans', label: `👤 Humans (${counts.humansCount})` },
+                          { key: 'bots', label: `🤖 Bots (${counts.botsCount})` },
+                        ].map(f => (
+                          <button
+                            key={f.key}
+                            type="button"
+                            onClick={() => setOverviewMemberFilter(f.key)}
+                            style={{
+                              padding: '4px 10px',
+                              borderRadius: '16px',
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              border: `1px solid ${overviewMemberFilter === f.key ? 'var(--primary)' : 'var(--border-color)'}`,
+                              background: overviewMemberFilter === f.key ? 'var(--primary)' : 'var(--bg-secondary)',
+                              color: overviewMemberFilter === f.key ? '#fff' : 'var(--text-muted)',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            {f.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Member Search input */}
+                    <div style={{ marginBottom: '1rem' }}>
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="Search members by username or ID..."
+                        style={{ fontSize: '0.82rem', padding: '6px 12px' }}
+                        value={overviewMemberSearch}
+                        onChange={e => setOverviewMemberSearch(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Member List */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '520px', overflowY: 'auto' }}>
+                      {filteredMembers.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-sub)' }}>
+                          <span style={{ fontSize: '2rem', display: 'block', marginBottom: '0.4rem' }}>🔍</span>
+                          <p style={{ fontSize: '0.85rem' }}>No members matched your search.</p>
+                        </div>
+                      ) : (
+                        filteredMembers.map(m => {
+                          const memberRoles = rolesList.filter(r => (m.roles || []).includes(r.id));
+
+                          return (
+                            <div
+                              key={m.id}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '0.75rem 0.9rem',
+                                borderRadius: 'var(--radius-sm)',
+                                background: 'var(--bg-secondary)',
+                                border: '1px solid var(--border-color)',
+                                gap: '0.75rem',
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                <img
+                                  src={m.avatar}
+                                  alt={m.username}
+                                  style={{
+                                    width: '38px',
+                                    height: '38px',
+                                    borderRadius: '50%',
+                                    border: m.isBot ? '2px solid #8b5cf6' : '2px solid var(--primary)',
+                                  }}
+                                />
+                                <div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-main)' }}>
+                                      {m.globalName || m.username}
+                                    </span>
+                                    {m.isBot && (
+                                      <span style={{
+                                        fontSize: '0.65rem',
+                                        padding: '1px 5px',
+                                        borderRadius: '4px',
+                                        background: '#5865F2',
+                                        color: '#fff',
+                                        fontWeight: 700,
+                                        letterSpacing: '0.5px',
+                                      }}>
+                                        BOT
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                    @{m.username} · ID: <code style={{ fontSize: '0.7rem' }}>{m.id}</code>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Roles */}
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                                {memberRoles.length > 0 ? (
+                                  memberRoles.map(r => (
+                                    <span
+                                      key={r.id}
+                                      style={{
+                                        padding: '2px 8px',
+                                        borderRadius: '12px',
+                                        fontSize: '0.7rem',
+                                        fontWeight: 600,
+                                        color: r.color && r.color !== '#94a3b8' ? r.color : 'var(--text-sub)',
+                                        border: `1px solid ${r.color && r.color !== '#94a3b8' ? r.color + '55' : 'var(--border-color)'}`,
+                                        background: r.color && r.color !== '#94a3b8' ? r.color + '15' : 'var(--bg-primary)',
+                                      }}
+                                    >
+                                      {r.name}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                    @everyone
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Server Structure & Roles */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+
+                    {/* Roles Breakdown */}
+                    <div className="editor-card" style={{ padding: '1.25rem' }}>
+                      <h3 style={{ fontSize: '1.05rem', margin: 0, marginBottom: '0.35rem' }}>🏷️ Server Roles ({rolesList.length})</h3>
+                      <p style={{ fontSize: '0.78rem', color: 'var(--text-sub)', marginBottom: '0.85rem' }}>Role hierarchy on your Discord server</p>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: '250px', overflowY: 'auto' }}>
+                        {rolesList.length === 0 ? (
+                          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>No custom roles created yet.</p>
+                        ) : (
+                          rolesList.map(r => (
+                            <div
+                              key={r.id}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '0.5rem 0.75rem',
+                                borderRadius: 'var(--radius-sm)',
+                                background: 'var(--bg-secondary)',
+                                borderLeft: `4px solid ${r.color || '#94a3b8'}`,
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: r.color || '#94a3b8' }} />
+                                <span style={{ fontWeight: 600, fontSize: '0.82rem', color: r.color || 'var(--text-main)' }}>
+                                  {r.name}
+                                </span>
+                              </div>
+                              <code style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{r.id}</code>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Channels Structure */}
+                    <div className="editor-card" style={{ padding: '1.25rem' }}>
+                      <h3 style={{ fontSize: '1.05rem', margin: 0, marginBottom: '0.35rem' }}>📁 Channel Structure ({counts.totalChannels})</h3>
+                      <p style={{ fontSize: '0.78rem', color: 'var(--text-sub)', marginBottom: '0.85rem' }}>Categories, text &amp; voice channels</p>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '250px', overflowY: 'auto' }}>
+                        {(overviewData?.channels?.categories || []).map(cat => {
+                          const childText = (overviewData?.channels?.text || []).filter(c => c.parentId === cat.id);
+                          const childVoice = (overviewData?.channels?.voice || []).filter(c => c.parentId === cat.id);
+
+                          return (
+                            <div key={cat.id} style={{ padding: '0.6rem 0.8rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>
+                              <div style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--text-sub)', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                                📁 {cat.name}
+                              </div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginLeft: '0.5rem' }}>
+                                {childText.map(t => (
+                                  <span key={t.id} style={{ fontSize: '0.74rem', padding: '1px 7px', borderRadius: '4px', background: 'var(--bg-primary)', color: 'var(--text-muted)' }}>
+                                    #{t.name}
+                                  </span>
+                                ))}
+                                {childVoice.map(v => (
+                                  <span key={v.id} style={{ fontSize: '0.74rem', padding: '1px 7px', borderRadius: '4px', background: 'var(--bg-primary)', color: '#06b6d4' }}>
+                                    🔊 {v.name}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Quick Portal Jump Links */}
+                    <div className="editor-card" style={{ padding: '1.25rem', background: 'var(--bg-secondary)' }}>
+                      <h4 style={{ fontSize: '0.9rem', marginBottom: '0.6rem' }}>⚡ Quick Actions</h4>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ fontSize: '0.78rem', padding: '5px 12px' }}
+                          onClick={() => setActiveTab('tickets')}
+                        >
+                          🎫 Support Tickets
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ fontSize: '0.78rem', padding: '5px 12px' }}
+                          onClick={() => setActiveTab('moderation')}
+                        >
+                          ⚔️ Moderation
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ fontSize: '0.78rem', padding: '5px 12px' }}
+                          onClick={() => setActiveTab('logs')}
+                        >
+                          📜 Audit Logs
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ fontSize: '0.78rem', padding: '5px 12px' }}
+                          onClick={() => setActiveTab('welcome')}
+                        >
+                          👋 Welcome Studio
+                        </button>
+                      </div>
+                    </div>
+
+                  </div>
+
+                </div>
+              </>
+            );
+          })()}
 
           {/* TAB: MODERATION */}
           {activeTab === 'moderation' && (() => {
