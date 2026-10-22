@@ -295,11 +295,11 @@ export default function DashboardPage() {
         setIsNewChatModalOpen(false);
         setNewChatTarget('');
         setNewChatMsg('Hello! How can we help you today?');
-        showToast(data.dmSent
-          ? '✅ Chat started & message sent to customer!'
-          : '✅ Chat created! (DM may be blocked by customer)');
+        showToast(data.note || (data.dmSent
+          ? '✅ Chat started & message sent to customer on Discord!'
+          : `⚠️ Chat created in dashboard (DM not delivered: ${data.dmError || 'DMs blocked by privacy settings'})`));
       } else {
-        showToast(`❌ Error: ${data.error || 'Could not start conversation'}`);
+        showToast(`❌ ${data.error || 'Could not start conversation'}`);
       }
     } catch (err) {
       showToast(`❌ Failed: ${err.message}`);
@@ -347,17 +347,21 @@ export default function DashboardPage() {
             <form onSubmit={handleStartConversation} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div className="form-group">
                 <label className="form-label">
-                  <span>Customer Discord User ID or Username</span>
+                  <span>Customer Discord User ID</span>
+                  <span className="form-label-desc">Must be a real Discord user (not the bot ID)</span>
                 </label>
                 <input
                   type="text"
                   className="form-input"
-                  placeholder="e.g. 1562510434412798052 or CustomerName"
+                  placeholder="e.g. 496682662522519563"
                   value={newChatTarget}
                   onChange={(e) => setNewChatTarget(e.target.value)}
                   required
                   autoFocus
                 />
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.35rem', display: 'block', lineHeight: 1.4 }}>
+                  💡 <b>How to get User ID:</b> In Discord, go to User Settings ⚙️ → Advanced → turn ON <b>Developer Mode</b>. Then right-click the customer&apos;s name or avatar and click <b>Copy User ID</b>.
+                </span>
               </div>
 
               <div className="form-group">

@@ -59,8 +59,16 @@ async function sendDiscordDM(token, userId, text) {
     body: JSON.stringify({ recipient_id: userId }),
   });
   if (!chRes.ok) {
-    const err = await chRes.text();
-    throw new Error(`Could not open DM channel: ${err}`);
+    const errText = await chRes.text();
+    let parsed;
+    try { parsed = JSON.parse(errText); } catch {}
+    if (parsed?.code === 50007) {
+      throw new Error('User has DMs disabled in privacy settings, does not share a server with the bot, or the ID is a bot.');
+    }
+    if (parsed?.code === 50033 || parsed?.code === 10013) {
+      throw new Error('Unknown User ID: No Discord user exists with this ID.');
+    }
+    throw new Error(parsed?.message || errText);
   }
   const { id: channelId } = await chRes.json();
 
@@ -71,8 +79,13 @@ async function sendDiscordDM(token, userId, text) {
     body: JSON.stringify({ content: text }),
   });
   if (!msgRes.ok) {
-    const err = await msgRes.text();
-    throw new Error(`Could not send DM: ${err}`);
+    const errText = await msgRes.text();
+    let parsed;
+    try { parsed = JSON.parse(errText); } catch {}
+    if (parsed?.code === 50007) {
+      throw new Error('User has DMs disabled in privacy settings, does not share a server with the bot, or the ID is a bot.');
+    }
+    throw new Error(parsed?.message || errText);
   }
   return await msgRes.json();
 }
@@ -186,6 +199,11 @@ export async function POST(request) {
       if (token && /^\d{15,22}$/.test(cleanTarget)) {
         const discordUser = await fetchDiscordUser(token, cleanTarget);
         if (discordUser) {
+          if (discordUser.bot) {
+            return NextResponse.json({
+              error: `This User ID belongs to a bot (@${discordUser.username})! Discord bots cannot DM other bots or themselves. Please enter a real customer's Discord User ID.`,
+            }, { status: 400 });
+          }
           userId = discordUser.id;
           username = discordUser.global_name || discordUser.username;
           if (discordUser.avatar) {
@@ -233,7 +251,15 @@ export async function POST(request) {
         });
       }
 
-      return NextResponse.json({ success: true, conversation: conv, dmSent, dmError });
+      return NextResponse.json({
+        success: true,
+        conversation: conv,
+        dmSent,
+        dmError,
+        note: dmSent
+          ? '✅ Chat started & message sent to customer on Discord!'
+          : `⚠️ Chat created in dashboard (DM not delivered: ${dmError})`,
+      });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
