@@ -100,13 +100,15 @@ export default function DashboardPage() {
 
   // Ticketing System State
   const [tickets, setTickets] = useState([]);
+  const [serverCategories, setServerCategories] = useState([]);
+  const [serverTextChannels, setServerTextChannels] = useState([]);
   const [ticketConfig, setTicketConfig] = useState({
     enabled: true,
-    categoryId: '',
-    transcriptChannelId: '',
-    supportRoleId: '',
-    maxOpenPerUser: 1,
-    openMessage: 'Welcome to your support ticket! A staff member will be with you shortly.',
+    categoryId: '1562822100903923854',
+    transcriptChannelId: '1562822217186803754',
+    supportRoleId: '1562687268739747850',
+    maxOpenPerUser: 5,
+    openMessage: 'Welcome to your support ticket! A staff member will be with you shortly. Please describe your issue.',
     autoCloseHours: 0,
   });
   const [savedTicketConfig, setSavedTicketConfig] = useState(null);
@@ -253,11 +255,25 @@ export default function DashboardPage() {
         if (ticketsRes.ok) {
           const td = await ticketsRes.json();
           if (Array.isArray(td?.tickets)) setTickets(td.tickets);
-          if (td?.config) {
-            setTicketConfig(td.config);
-            setSavedTicketConfig(td.config);
-          }
+          if (Array.isArray(td?.categories)) setServerCategories(td.categories);
+          if (Array.isArray(td?.textChannels)) setServerTextChannels(td.textChannels);
           if (Array.isArray(td?.roles) && td.roles.length > 0) setServerRoles(td.roles);
+
+          let mergedTicketCfg = td?.config || {};
+          try {
+            const cachedTicket = localStorage.getItem('modportal_ticket_config');
+            if (cachedTicket) {
+              const parsedTicket = JSON.parse(cachedTicket);
+              mergedTicketCfg = { ...mergedTicketCfg, ...parsedTicket };
+            }
+          } catch {}
+
+          if (!mergedTicketCfg.categoryId) mergedTicketCfg.categoryId = '1562822100903923854';
+          if (!mergedTicketCfg.transcriptChannelId) mergedTicketCfg.transcriptChannelId = '1562822217186803754';
+          if (!mergedTicketCfg.supportRoleId) mergedTicketCfg.supportRoleId = '1562687268739747850';
+
+          setTicketConfig(mergedTicketCfg);
+          setSavedTicketConfig(mergedTicketCfg);
         }
       } catch {
         setServerStatus('Offline / Local');
@@ -1394,9 +1410,24 @@ export default function DashboardPage() {
                       />
                       <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         {filteredOpen.length === 0 ? (
-                          <div className="editor-card" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-sub)' }}>
-                            <span style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>🎫</span>
-                            <p style={{ fontSize: '0.85rem' }}>No open tickets</p>
+                          <div className="editor-card" style={{ padding: '2rem 1.5rem', textAlign: 'center', color: 'var(--text-sub)' }}>
+                            <span style={{ fontSize: '2.4rem', display: 'block', marginBottom: '0.6rem' }}>🎫</span>
+                            <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-main)', marginBottom: '0.35rem' }}>
+                              No Open Tickets Right Now
+                            </div>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: 1.5 }}>
+                              In Discord, type <code style={{ color: 'var(--primary)', background: 'var(--bg-secondary)', padding: '2px 6px', borderRadius: '4px' }}>/ticket open</code> or click a panel button.
+                            </p>
+                            {closedTickets.length > 0 && (
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{ fontSize: '0.8rem', padding: '6px 14px', width: '100%' }}
+                                onClick={() => setTicketSubView('closed')}
+                              >
+                                📋 View {closedTickets.length} Closed Ticket(s) &amp; Transcripts
+                              </button>
+                            )}
                           </div>
                         ) : filteredOpen.map(ticket => (
                           <div
@@ -1674,29 +1705,84 @@ export default function DashboardPage() {
                         </div>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <div className="form-group" style={{ maxWidth: '500px' }}>
-                          <label className="form-label">
+                        <div className="form-group" style={{ maxWidth: '560px' }}>
+                          <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span>Ticket Category ID</span>
-                            <span className="form-label-desc">Discord category under which ticket channels are created</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const u = { ...ticketConfig, categoryId: '1562822100903923854' };
+                                setTicketConfig(u);
+                                handleSaveTicketConfig(u);
+                              }}
+                              style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}
+                            >
+                              ⚡ Auto-fill Tickets Category (1562822100903923854)
+                            </button>
                           </label>
                           <input type="text" className="form-input"
-                            placeholder="e.g. 1562640000000000000 (right-click category → Copy ID)"
+                            placeholder="e.g. 1562822100903923854"
                             value={ticketConfig.categoryId || ''}
                             onChange={e => setTicketConfig({ ...ticketConfig, categoryId: e.target.value })}
                             onBlur={() => handleSaveTicketConfig()}
                           />
+                          {serverCategories.length > 0 && (
+                            <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                              {serverCategories.map(cat => (
+                                <button key={cat.id} type="button"
+                                  onClick={() => { const u = { ...ticketConfig, categoryId: cat.id }; setTicketConfig(u); handleSaveTicketConfig(u); }}
+                                  style={{
+                                    padding: '3px 10px', borderRadius: '20px', cursor: 'pointer', fontSize: '0.76rem', fontWeight: 600,
+                                    border: `2px solid ${ticketConfig.categoryId === cat.id ? 'var(--primary)' : 'var(--border-color)'}`,
+                                    background: ticketConfig.categoryId === cat.id ? 'rgba(99,102,241,0.2)' : 'var(--bg-secondary)',
+                                    color: ticketConfig.categoryId === cat.id ? 'var(--primary)' : 'var(--text-muted)',
+                                    transition: 'all 0.15s',
+                                  }}>
+                                  {ticketConfig.categoryId === cat.id ? '✓ ' : ''}📁 {cat.name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                        <div className="form-group" style={{ maxWidth: '500px' }}>
-                          <label className="form-label">
+
+                        <div className="form-group" style={{ maxWidth: '560px' }}>
+                          <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span>Transcript Channel ID</span>
-                            <span className="form-label-desc">Closed ticket transcripts (HTML file) are posted here</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const u = { ...ticketConfig, transcriptChannelId: '1562822217186803754' };
+                                setTicketConfig(u);
+                                handleSaveTicketConfig(u);
+                              }}
+                              style={{ background: 'transparent', border: 'none', color: '#10b981', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}
+                            >
+                              ⚡ Auto-fill #transcript (1562822217186803754)
+                            </button>
                           </label>
                           <input type="text" className="form-input"
-                            placeholder="e.g. 1562687171079708784"
+                            placeholder="e.g. 1562822217186803754"
                             value={ticketConfig.transcriptChannelId || ''}
                             onChange={e => setTicketConfig({ ...ticketConfig, transcriptChannelId: e.target.value })}
                             onBlur={() => handleSaveTicketConfig()}
                           />
+                          {serverTextChannels.length > 0 && (
+                            <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                              {serverTextChannels.map(ch => (
+                                <button key={ch.id} type="button"
+                                  onClick={() => { const u = { ...ticketConfig, transcriptChannelId: ch.id }; setTicketConfig(u); handleSaveTicketConfig(u); }}
+                                  style={{
+                                    padding: '3px 10px', borderRadius: '20px', cursor: 'pointer', fontSize: '0.76rem', fontWeight: 600,
+                                    border: `2px solid ${ticketConfig.transcriptChannelId === ch.id ? '#10b981' : 'var(--border-color)'}`,
+                                    background: ticketConfig.transcriptChannelId === ch.id ? 'rgba(16,185,129,0.2)' : 'var(--bg-secondary)',
+                                    color: ticketConfig.transcriptChannelId === ch.id ? '#10b981' : 'var(--text-muted)',
+                                    transition: 'all 0.15s',
+                                  }}>
+                                  {ticketConfig.transcriptChannelId === ch.id ? '✓ ' : ''}#{ch.name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1710,10 +1796,20 @@ export default function DashboardPage() {
                         </div>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <div className="form-group" style={{ maxWidth: '500px' }}>
-                          <label className="form-label">
+                        <div className="form-group" style={{ maxWidth: '560px' }}>
+                          <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span>Support Role ID</span>
-                            <span className="form-label-desc">This role gets access to all ticket channels automatically</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const u = { ...ticketConfig, supportRoleId: '1562687268739747850' };
+                                setTicketConfig(u);
+                                handleSaveTicketConfig(u);
+                              }}
+                              style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}
+                            >
+                              ⚡ Auto-fill Admin Role (1562687268739747850)
+                            </button>
                           </label>
                           <input type="text" className="form-input"
                             placeholder="e.g. 1562687268739747850"
