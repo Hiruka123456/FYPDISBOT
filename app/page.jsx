@@ -19,7 +19,7 @@ export default function DashboardPage() {
   const [savedConfig, setSavedConfig] = useState(null);
   const [config, setConfig] = useState({
     enabled: true,
-    channelId: '',
+    channelId: '1562640532226842737',
     title: 'Welcome to {server}!',
     message: 'Hey {user}, welcome to the server! We are thrilled to have you here. You are our #{memberCount} member! 🚀',
     imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
@@ -250,13 +250,13 @@ export default function DashboardPage() {
               {/* Target Channel */}
               <div className="form-group">
                 <label className="form-label">
-                  <span>Welcome Channel ID</span>
-                  <span className="form-label-desc">Leave empty to use the server&apos;s system channel</span>
+                  <span>Welcome Channel (ID or #name)</span>
+                  <span className="form-label-desc">e.g. 1562640532226842737 or #welcome</span>
                 </label>
                 <input
                   type="text"
                   className="form-input"
-                  placeholder="e.g. 123456789012345678"
+                  placeholder="e.g. 1562640532226842737 or #welcome"
                   value={config.channelId}
                   onChange={(e) => setConfig({ ...config, channelId: e.target.value })}
                 />

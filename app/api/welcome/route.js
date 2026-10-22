@@ -3,12 +3,23 @@ import fs from 'fs';
 import path from 'path';
 
 // Path to shared welcomeConfig.json in the bot directory
-const botConfigPath = path.join(process.cwd(), '..', 'bot', 'welcomeConfig.json');
+const possibleBotPaths = [
+  path.resolve(process.cwd(), '..', 'bot', 'welcomeConfig.json'),
+  path.resolve('F:', 'FYPDISBOT', 'bot', 'welcomeConfig.json'),
+  path.resolve(process.cwd(), 'welcomeConfig.json'),
+];
+
+function getBotConfigPath() {
+  for (const p of possibleBotPaths) {
+    if (fs.existsSync(p)) return p;
+  }
+  return possibleBotPaths[0];
+}
 
 // Default fallback config
 let memoryConfig = {
   enabled: true,
-  channelId: '',
+  channelId: '1562640532226842737',
   title: 'Welcome to {server}!',
   message: 'Hey {user}, welcome to the server! We are thrilled to have you here. You are our #{memberCount} member! 🚀',
   imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
@@ -18,12 +29,13 @@ let memoryConfig = {
 // Read config from file or memory
 function loadConfig() {
   try {
-    if (fs.existsSync(botConfigPath)) {
-      const data = fs.readFileSync(botConfigPath, 'utf8');
+    const configPath = getBotConfigPath();
+    if (fs.existsSync(configPath)) {
+      const data = fs.readFileSync(configPath, 'utf8');
       memoryConfig = JSON.parse(data);
     }
   } catch {
-    // If running standalone or on Vercel where sibling folder isn't mounted, memoryConfig is used
+    // Handled in serverless/Vercel
   }
   return memoryConfig;
 }
@@ -32,13 +44,14 @@ function loadConfig() {
 function saveConfig(newConfig) {
   memoryConfig = { ...memoryConfig, ...newConfig };
   try {
-    const dir = path.dirname(botConfigPath);
+    const configPath = getBotConfigPath();
+    const dir = path.dirname(configPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(botConfigPath, JSON.stringify(memoryConfig, null, 2), 'utf8');
+    fs.writeFileSync(configPath, JSON.stringify(memoryConfig, null, 2), 'utf8');
   } catch {
-    // Handled in serverless environment
+    // Handled in serverless/Vercel
   }
   return memoryConfig;
 }
