@@ -14,6 +14,7 @@ export default function DashboardPage() {
   const [serverStatus, setServerStatus] = useState('Checking...');
   const [toastMessage, setToastMessage] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isTestingDiscord, setIsTestingDiscord] = useState(false);
 
   // Welcome Config State
   const [savedConfig, setSavedConfig] = useState(null);
@@ -22,7 +23,7 @@ export default function DashboardPage() {
     channelId: '1562640532226842737',
     title: 'Welcome to {server}!',
     message: 'Hey {user}, welcome to the server! We are thrilled to have you here. You are our #{memberCount} member! 🚀',
-    imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
+    imageUrl: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=1200',
     embedColor: '#6366f1',
   });
 
@@ -110,19 +111,20 @@ export default function DashboardPage() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  const handleSaveWelcome = async () => {
-    if (!isDirty) return;
+  // Immediate save helper (used when clicking picture presets or toggle)
+  const saveConfigDirectly = async (newConf, successMessage = '✅ Saved live to Discord Bot!') => {
+    setConfig(newConf);
+    setSavedConfig(newConf);
     setIsSaving(true);
     try {
       const res = await fetch('/api/welcome', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
+        body: JSON.stringify(newConf),
       });
 
       if (res.ok) {
-        setSavedConfig(config);
-        showToast('✅ Welcome settings saved successfully!');
+        showToast(successMessage);
       } else {
         showToast('❌ Failed to save configuration.');
       }
@@ -130,6 +132,33 @@ export default function DashboardPage() {
       showToast(`❌ Error: ${err.message}`);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleSaveWelcome = async () => {
+    if (!isDirty) return;
+    await saveConfigDirectly(config, '✅ All settings saved to Discord Bot!');
+  };
+
+  // Test welcome message directly from website
+  const handleTestInDiscord = async () => {
+    setIsTestingDiscord(true);
+    try {
+      const res = await fetch('/api/welcome', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test', channelId: config.channelId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('🚀 Test welcome card posted to Discord!');
+      } else {
+        showToast(`❌ Discord test error: ${data.error}`);
+      }
+    } catch (err) {
+      showToast(`❌ Error testing card: ${err.message}`);
+    } finally {
+      setIsTestingDiscord(false);
     }
   };
 
@@ -162,12 +191,11 @@ export default function DashboardPage() {
 
       const data = await res.json();
       if (res.ok) {
-        // Refresh conversations
         const refreshed = await fetch('/api/chats').then((r) => r.json());
         if (refreshed?.conversations) {
           setConversations(refreshed.conversations);
         }
-        showToast(data.discordNote || '✅ Reply dispatched to customer!');
+        showToast(data.discordNote || '✅ Reply dispatched to customer on Discord!');
       } else {
         showToast(`❌ Error: ${data.error}`);
       }
@@ -316,19 +344,19 @@ export default function DashboardPage() {
         <nav className="sidebar-nav">
           <div className="nav-section-title">COMMUNICATION</div>
           <button
+            className={`nav-item ${activeTab === 'welcome' ? 'active' : ''}`}
+            onClick={() => setActiveTab('welcome')}
+          >
+            <span className="nav-icon">👋</span>
+            <span>Welcome Studio</span>
+          </button>
+          <button
             className={`nav-item ${activeTab === 'chats' ? 'active' : ''}`}
             onClick={() => setActiveTab('chats')}
           >
             <span className="nav-icon">💬</span>
             <span>Customer Chats</span>
             <span className="pill">{conversations.length}</span>
-          </button>
-          <button
-            className={`nav-item ${activeTab === 'welcome' ? 'active' : ''}`}
-            onClick={() => setActiveTab('welcome')}
-          >
-            <span className="nav-icon">👋</span>
-            <span>Welcome Studio</span>
           </button>
 
           <div className="nav-section-title">MANAGEMENT</div>
@@ -372,7 +400,7 @@ export default function DashboardPage() {
         <header className="topbar">
           <div className="topbar-search">
             <span className="search-icon">🔍</span>
-            <input type="text" placeholder="Search members, logs, chats..." />
+            <input type="text" placeholder="Search settings, channels, chats..." />
           </div>
 
           <div className="topbar-actions">
@@ -385,10 +413,253 @@ export default function DashboardPage() {
 
         {/* Dashboard Content */}
         <div className="dashboard-body">
-          {/* TAB 1: CUSTOMER LIVE CHAT INBOX */}
+          {/* TAB 1: WELCOME MESSAGE STUDIO */}
+          {activeTab === 'welcome' && (
+            <>
+              {/* Banner with Live Sync Status & Save Button */}
+              <div className="welcome-banner">
+                <div className="welcome-text">
+                  <h1>Welcome Message Studio</h1>
+                  <p>Customize the automated greeting, banner picture, and target channel. Changes save live to your bot!</p>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ fontSize: '0.8rem', color: isSaving ? '#f59e0b' : '#10b981', fontWeight: 600 }}>
+                    {isSaving ? '💾 Saving...' : '🟢 Live Synced with Bot'}
+                  </span>
+
+                  {isDirty && (
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleSaveWelcome}
+                      disabled={isSaving}
+                      style={{
+                        animation: 'pulse 1.8s infinite',
+                        whiteSpace: 'nowrap',
+                        boxShadow: '0 0 15px rgba(99, 102, 241, 0.6)'
+                      }}
+                    >
+                      <span>{isSaving ? 'Saving...' : '💾 Save Changes'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Welcome Editor Grid */}
+              <div className="welcome-editor-grid">
+                {/* Form Editor */}
+                <div className="editor-card">
+                  <div className="editor-card-header">
+                    <div className="editor-title">
+                      <h3>Message Configuration</h3>
+                      <p>Fine-tune how your bot greets newcomers</p>
+                    </div>
+                    <div className="switch-container">
+                      <span style={{ fontSize: '0.8rem', color: config.enabled ? '#10b981' : '#94a3b8' }}>
+                        {config.enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                      <label className="switch">
+                        <input
+                          type="checkbox"
+                          checked={config.enabled}
+                          onChange={(e) => saveConfigDirectly({ ...config, enabled: e.target.checked }, e.target.checked ? '✅ Welcome messages enabled!' : '⚠️ Welcome messages disabled!')}
+                        />
+                        <span className="slider"></span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Target Channel */}
+                  <div className="form-group">
+                    <label className="form-label">
+                      <span>Welcome Channel (ID or #name)</span>
+                      <span className="form-label-desc">e.g. 1562640532226842737 or #welcome</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. 1562640532226842737 or #welcome"
+                      value={config.channelId}
+                      onChange={(e) => setConfig({ ...config, channelId: e.target.value })}
+                      onBlur={() => saveConfigDirectly(config, '✅ Channel setting saved to bot!')}
+                    />
+                  </div>
+
+                  {/* Embed Title */}
+                  <div className="form-group">
+                    <label className="form-label">Embed Title</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="Welcome to {server}!"
+                      value={config.title}
+                      onChange={(e) => setConfig({ ...config, title: e.target.value })}
+                      onBlur={() => saveConfigDirectly(config, '✅ Title saved to bot!')}
+                    />
+                  </div>
+
+                  {/* Message Description */}
+                  <div className="form-group">
+                    <label className="form-label">
+                      <span>Welcome Message Text</span>
+                      <span className="form-label-desc">Supports Discord markdown</span>
+                    </label>
+                    <textarea
+                      className="form-textarea"
+                      value={config.message}
+                      onChange={(e) => setConfig({ ...config, message: e.target.value })}
+                      onBlur={() => saveConfigDirectly(config, '✅ Message text saved to bot!')}
+                    />
+                    <div className="tag-chips">
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-sub)', alignSelf: 'center' }}>Click to insert:</span>
+                      <button type="button" className="chip" onClick={() => insertVariable('{user}')}>
+                        {'{user}'}
+                      </button>
+                      <button type="button" className="chip" onClick={() => insertVariable('{server}')}>
+                        {'{server}'}
+                      </button>
+                      <button type="button" className="chip" onClick={() => insertVariable('{memberCount}')}>
+                        {'{memberCount}'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Banner Image URL & Instant Preset Selectors */}
+                  <div className="form-group">
+                    <label className="form-label">
+                      <span>Welcome Picture / Banner URL</span>
+                      <span className="form-label-desc">Click any picture below to apply instantly</span>
+                    </label>
+                    <input
+                      type="url"
+                      className="form-input"
+                      placeholder="https://example.com/banner.jpg"
+                      value={config.imageUrl}
+                      onChange={(e) => setConfig({ ...config, imageUrl: e.target.value })}
+                      onBlur={() => saveConfigDirectly(config, '✅ Picture URL saved to bot!')}
+                    />
+                    <div className="preset-list">
+                      {PRESET_BANNERS.map((preset) => (
+                        <button
+                          key={preset.name}
+                          type="button"
+                          className={`preset-btn ${config.imageUrl === preset.url ? 'selected' : ''}`}
+                          style={{ backgroundImage: `url(${preset.url})` }}
+                          onClick={() => {
+                            // IMMEDIATELY SAVE NEW PICTURE TO BOT!
+                            saveConfigDirectly({ ...config, imageUrl: preset.url }, `🖼️ Changed to ${preset.name} picture & saved live!`);
+                          }}
+                        >
+                          <span className="preset-label">{preset.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Embed Color */}
+                  <div className="form-group">
+                    <label className="form-label">Embed Accent Color</label>
+                    <div className="color-picker-row">
+                      <input
+                        type="color"
+                        className="color-input"
+                        value={config.embedColor}
+                        onChange={(e) => setConfig({ ...config, embedColor: e.target.value })}
+                        onBlur={() => saveConfigDirectly(config, '✅ Accent color saved to bot!')}
+                      />
+                      <input
+                        type="text"
+                        className="form-input"
+                        style={{ width: '130px' }}
+                        value={config.embedColor}
+                        onChange={(e) => setConfig({ ...config, embedColor: e.target.value })}
+                        onBlur={() => saveConfigDirectly(config, '✅ Accent color saved to bot!')}
+                      />
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Left-border accent in Discord</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Live Discord Simulation Preview */}
+                <div className="preview-container">
+                  <div className="editor-card" style={{ height: 'fit-content' }}>
+                    <div className="editor-card-header">
+                      <div className="editor-title">
+                        <h3>Live Discord Preview</h3>
+                        <p>Simulating how your card looks right now</p>
+                      </div>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={handleTestInDiscord}
+                        disabled={isTestingDiscord}
+                        style={{ whiteSpace: 'nowrap' }}
+                      >
+                        {isTestingDiscord ? 'Sending...' : '⚡ Test in Discord'}
+                      </button>
+                    </div>
+
+                    <div className="discord-mockup">
+                      <div className="discord-header">
+                        <div className="discord-avatar">🤖</div>
+                        <div className="discord-meta">
+                          <span className="discord-bot-name">FYP Project</span>
+                          <span className="discord-bot-tag">BOT</span>
+                          <span className="discord-time">Today at 12:00 PM</span>
+                        </div>
+                      </div>
+
+                      <div className="discord-mention-line">
+                        Welcome <span className="discord-mention">@Alex</span>! 👋
+                      </div>
+
+                      <div
+                        className="discord-embed"
+                        style={{ borderLeftColor: config.embedColor || '#6366f1' }}
+                      >
+                        <div className="embed-top-row">
+                          <div className="embed-content">
+                            <div className="embed-title">{previewTitle}</div>
+                            <div className="embed-desc">{previewDesc}</div>
+                          </div>
+                          <img
+                            src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80"
+                            alt="Avatar"
+                            className="embed-thumb"
+                          />
+                        </div>
+
+                        {config.imageUrl && config.imageUrl.trim() !== '' && (
+                          <img
+                            src={config.imageUrl}
+                            alt="Welcome Banner"
+                            className="embed-image"
+                            onError={(e) => {
+                              e.target.style.display = 'none';
+                            }}
+                          />
+                        )}
+
+                        <div className="embed-footer">
+                          Member #142 • Discord Community
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                      <p style={{ fontWeight: '600', color: 'var(--text-main)', marginBottom: '0.4rem' }}>💡 Instant Testing:</p>
+                      <p>• Click the <b>⚡ Test in Discord</b> button above to see this card in your server right away.</p>
+                      <p style={{ marginTop: '0.25rem' }}>• Or in Discord, type <code>/testwelcome</code> anytime!</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* TAB 2: CUSTOMER LIVE CHAT INBOX */}
           {activeTab === 'chats' && (
             <div className="chat-workspace">
-              {/* Chat Sidebar: Conversation List */}
+              {/* Chat Sidebar */}
               <div className="chat-sidebar">
                 <div className="chat-sidebar-header">
                   <div className="chat-sidebar-title-row">
@@ -450,7 +721,6 @@ export default function DashboardPage() {
               <div className="chat-main-area">
                 {activeConversation ? (
                   <>
-                    {/* Header */}
                     <div className="chat-main-header">
                       <div className="customer-profile">
                         <img
@@ -466,7 +736,6 @@ export default function DashboardPage() {
                       <span className="chat-badge">Direct Message (Discord)</span>
                     </div>
 
-                    {/* Messages Feed */}
                     <div className="message-feed">
                       {activeConversation.messages && activeConversation.messages.length > 0 ? (
                         activeConversation.messages.map((msg) => {
@@ -490,7 +759,6 @@ export default function DashboardPage() {
                       <div ref={messageEndRef} />
                     </div>
 
-                    {/* Input Bar to Reply to Customer */}
                     <form className="chat-input-bar" onSubmit={handleSendReply}>
                       <input
                         type="text"
@@ -516,228 +784,6 @@ export default function DashboardPage() {
                 )}
               </div>
             </div>
-          )}
-
-          {/* TAB 2: WELCOME MESSAGE STUDIO */}
-          {activeTab === 'welcome' && (
-            <>
-              {/* Banner with ONLY ONE conditional save button */}
-              <div className="welcome-banner">
-                <div className="welcome-text">
-                  <h1>Welcome Message Studio</h1>
-                  <p>Customize the automated greeting, image banner, embed styling, and target channel for new Discord members.</p>
-                </div>
-
-                {/* ONLY ONE Save Button: visible ONLY when something changed! */}
-                {isDirty && (
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleSaveWelcome}
-                    disabled={isSaving}
-                    style={{
-                      animation: 'pulse 1.8s infinite',
-                      whiteSpace: 'nowrap',
-                      boxShadow: '0 0 15px rgba(99, 102, 241, 0.6)'
-                    }}
-                  >
-                    <span>{isSaving ? 'Saving...' : '💾 Save Changes'}</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Welcome Editor Grid */}
-              <div className="welcome-editor-grid">
-                {/* Form Editor */}
-                <div className="editor-card">
-                  <div className="editor-card-header">
-                    <div className="editor-title">
-                      <h3>Message Configuration</h3>
-                      <p>Fine-tune how your bot greets newcomers</p>
-                    </div>
-                    <div className="switch-container">
-                      <span style={{ fontSize: '0.8rem', color: config.enabled ? '#10b981' : '#94a3b8' }}>
-                        {config.enabled ? 'Enabled' : 'Disabled'}
-                      </span>
-                      <label className="switch">
-                        <input
-                          type="checkbox"
-                          checked={config.enabled}
-                          onChange={(e) => setConfig({ ...config, enabled: e.target.checked })}
-                        />
-                        <span className="slider"></span>
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* Target Channel */}
-                  <div className="form-group">
-                    <label className="form-label">
-                      <span>Welcome Channel (ID or #name)</span>
-                      <span className="form-label-desc">e.g. 1562640532226842737 or #welcome</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="e.g. 1562640532226842737 or #welcome"
-                      value={config.channelId}
-                      onChange={(e) => setConfig({ ...config, channelId: e.target.value })}
-                    />
-                  </div>
-
-                  {/* Embed Title */}
-                  <div className="form-group">
-                    <label className="form-label">Embed Title</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="Welcome to {server}!"
-                      value={config.title}
-                      onChange={(e) => setConfig({ ...config, title: e.target.value })}
-                    />
-                  </div>
-
-                  {/* Message Description */}
-                  <div className="form-group">
-                    <label className="form-label">
-                      <span>Welcome Message Text</span>
-                      <span className="form-label-desc">Supports Discord markdown</span>
-                    </label>
-                    <textarea
-                      className="form-textarea"
-                      value={config.message}
-                      onChange={(e) => setConfig({ ...config, message: e.target.value })}
-                    />
-                    <div className="tag-chips">
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-sub)', alignSelf: 'center' }}>Click to insert:</span>
-                      <button type="button" className="chip" onClick={() => insertVariable('{user}')}>
-                        {'{user}'}
-                      </button>
-                      <button type="button" className="chip" onClick={() => insertVariable('{server}')}>
-                        {'{server}'}
-                      </button>
-                      <button type="button" className="chip" onClick={() => insertVariable('{memberCount}')}>
-                        {'{memberCount}'}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Banner Image URL */}
-                  <div className="form-group">
-                    <label className="form-label">
-                      <span>Welcome Picture / Banner URL</span>
-                      <span className="form-label-desc">Direct link to JPG, PNG, or GIF</span>
-                    </label>
-                    <input
-                      type="url"
-                      className="form-input"
-                      placeholder="https://example.com/banner.jpg"
-                      value={config.imageUrl}
-                      onChange={(e) => setConfig({ ...config, imageUrl: e.target.value })}
-                    />
-                    <div className="preset-list">
-                      {PRESET_BANNERS.map((preset) => (
-                        <button
-                          key={preset.name}
-                          type="button"
-                          className={`preset-btn ${config.imageUrl === preset.url ? 'selected' : ''}`}
-                          style={{ backgroundImage: `url(${preset.url})` }}
-                          onClick={() => setConfig({ ...config, imageUrl: preset.url })}
-                        >
-                          <span className="preset-label">{preset.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Embed Color */}
-                  <div className="form-group">
-                    <label className="form-label">Embed Accent Color</label>
-                    <div className="color-picker-row">
-                      <input
-                        type="color"
-                        className="color-input"
-                        value={config.embedColor}
-                        onChange={(e) => setConfig({ ...config, embedColor: e.target.value })}
-                      />
-                      <input
-                        type="text"
-                        className="form-input"
-                        style={{ width: '130px' }}
-                        value={config.embedColor}
-                        onChange={(e) => setConfig({ ...config, embedColor: e.target.value })}
-                      />
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Sidebar color in Discord</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Live Discord Simulation Preview */}
-                <div className="preview-container">
-                  <div className="editor-card" style={{ height: 'fit-content' }}>
-                    <div className="editor-card-header">
-                      <div className="editor-title">
-                        <h3>Live Discord Preview</h3>
-                        <p>Real-time simulation of the welcome card</p>
-                      </div>
-                      <span className="badge" style={{ color: '#10b981' }}>Live Preview</span>
-                    </div>
-
-                    <div className="discord-mockup">
-                      <div className="discord-header">
-                        <div className="discord-avatar">🤖</div>
-                        <div className="discord-meta">
-                          <span className="discord-bot-name">FYP Project</span>
-                          <span className="discord-bot-tag">BOT</span>
-                          <span className="discord-time">Today at 12:00 PM</span>
-                        </div>
-                      </div>
-
-                      <div className="discord-mention-line">
-                        Welcome <span className="discord-mention">@Alex</span>! 👋
-                      </div>
-
-                      <div
-                        className="discord-embed"
-                        style={{ borderLeftColor: config.embedColor || '#6366f1' }}
-                      >
-                        <div className="embed-top-row">
-                          <div className="embed-content">
-                            <div className="embed-title">{previewTitle}</div>
-                            <div className="embed-desc">{previewDesc}</div>
-                          </div>
-                          <img
-                            src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80"
-                            alt="Avatar"
-                            className="embed-thumb"
-                          />
-                        </div>
-
-                        {config.imageUrl && config.imageUrl.trim() !== '' && (
-                          <img
-                            src={config.imageUrl}
-                            alt="Welcome Banner"
-                            className="embed-image"
-                            onError={(e) => {
-                              e.target.style.display = 'none';
-                            }}
-                          />
-                        )}
-
-                        <div className="embed-footer">
-                          Member #142 • Discord Community
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                      <p style={{ fontWeight: '600', color: 'var(--text-main)', marginBottom: '0.4rem' }}>💡 Slash Commands:</p>
-                      <p>• Type <code>/testwelcome</code> in any channel to preview this card.</p>
-                      <p style={{ marginTop: '0.25rem' }}>• Type <code>/setwelcome</code> to set your welcome channel with 1 click.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </>
           )}
 
           {/* TAB 3: OVERVIEW */}

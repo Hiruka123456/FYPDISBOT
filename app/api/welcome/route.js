@@ -22,7 +22,7 @@ let memoryConfig = {
   channelId: '1562640532226842737',
   title: 'Welcome to {server}!',
   message: 'Hey {user}, welcome to the server! We are thrilled to have you here. You are our #{memberCount} member! 🚀',
-  imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
+  imageUrl: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=1200',
   embedColor: '#6366f1',
 };
 
@@ -56,6 +56,41 @@ function saveConfig(newConfig) {
   return memoryConfig;
 }
 
+// Send test message directly via Discord REST API
+async function sendDiscordTest(token, channelId, config) {
+  if (!token || !channelId) {
+    throw new Error('Bot token or Channel ID missing');
+  }
+
+  const embed = {
+    title: (config.title || 'Welcome!').replace(/{server}/g, 'Discord Server'),
+    description: (config.message || 'Welcome!').replace(/{server}/g, 'Discord Server').replace(/{user}/g, '@NewMember'),
+    color: parseInt((config.embedColor || '#6366f1').replace('#', ''), 16),
+    image: config.imageUrl ? { url: config.imageUrl } : undefined,
+    footer: { text: 'Member #142 • Discord Server' },
+    timestamp: new Date().toISOString(),
+  };
+
+  const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bot ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      content: '🧪 **[Test Welcome Message from Website Dashboard]**',
+      embeds: [embed],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(errText);
+  }
+
+  return await res.json();
+}
+
 export async function GET() {
   const config = loadConfig();
   return NextResponse.json(config);
@@ -64,6 +99,18 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
+
+    // Direct test trigger from website
+    if (body.action === 'test') {
+      const currentConfig = loadConfig();
+      const token = process.env.DISCORD_TOKEN;
+      const channelId = body.channelId || currentConfig.channelId;
+
+      await sendDiscordTest(token, channelId, currentConfig);
+      return NextResponse.json({ success: true, message: 'Test message sent to Discord!' });
+    }
+
+    // Save configuration
     const updated = saveConfig(body);
     return NextResponse.json({ success: true, config: updated });
   } catch (err) {
