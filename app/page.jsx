@@ -413,9 +413,9 @@ export default function DashboardPage() {
 
                 {/* Helpful instructions */}
                 <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                  <p style={{ fontWeight: '600', color: 'var(--text-main)', marginBottom: '0.4rem' }}>💡 Quick Tips:</p>
-                  <p>• Type <code>!testwelcome</code> in any Discord channel to test this card instantly.</p>
-                  <p style={{ marginTop: '0.25rem' }}>• To get a Channel ID: In Discord, go to Settings &gt; Advanced &gt; turn on <b>Developer Mode</b>, then right-click your welcome channel and click <b>Copy Channel ID</b>.</p>
+                  <p style={{ fontWeight: '600', color: 'var(--text-main)', marginBottom: '0.4rem' }}>💡 Slash Commands:</p>
+                  <p>• Type <code>/testwelcome</code> in any channel to preview this card.</p>
+                  <p style={{ marginTop: '0.25rem' }}>• Type <code>/setwelcome</code> to set your welcome channel with 1 click.</p>
                 </div>
               </div>
             </div>
